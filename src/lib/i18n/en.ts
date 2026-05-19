@@ -79,6 +79,7 @@ export const en = {
     saved_toast: 'Profile saved',
     firstNamePlaceholder: 'Jane',
     lastNamePlaceholder: 'Doe',
+    backToProjects: 'Back to projects',
   },
   workItem: {
     level: {
@@ -110,6 +111,8 @@ export const en = {
     createdAt: 'Created: {date}',
     updatedAt: 'Updated: {date}',
     descriptionPlaceholder: 'Markdown supported',
+    deliverable: 'Deliverable',
+    deliverablePlaceholder: 'What gets produced',
   },
   dependencies: {
     predecessors: 'Predecessors',

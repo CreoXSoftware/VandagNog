@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { Link } from '@tanstack/react-router';
+import { ArrowLeft } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { useProfile, useUpdateProfile } from '@/hooks/useProfile';
 import { Input } from '@/components/ui/Input';
@@ -52,6 +54,13 @@ export function ProfilePage() {
 
   return (
     <div className="max-w-xl mx-auto p-6 space-y-6 overflow-y-auto h-full">
+      <Link
+        to="/projects"
+        className="inline-flex items-center gap-1.5 text-sm text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100"
+      >
+        <ArrowLeft size={14} />
+        {t('profile.backToProjects')}
+      </Link>
       <h2 className="text-base font-semibold">{t('profile.title')}</h2>
 
       <div className="flex items-center gap-4 border border-neutral-200 dark:border-neutral-800 rounded-lg bg-white dark:bg-neutral-900 p-4">

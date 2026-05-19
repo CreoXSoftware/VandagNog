@@ -95,10 +95,7 @@ export function useDeleteWorkItem() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: { id: string; project_id: string }) => {
-      const { error } = await supabase
-        .from('work_items')
-        .update({ deleted_at: new Date().toISOString() })
-        .eq('id', input.id);
+      const { error } = await supabase.rpc('soft_delete_work_item', { p_id: input.id });
       if (error) throw error;
     },
     onSuccess: (_d, input) => qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) }),
@@ -109,7 +106,7 @@ export function useRestoreWorkItem() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: { id: string; project_id: string }) => {
-      const { error } = await supabase.from('work_items').update({ deleted_at: null }).eq('id', input.id);
+      const { error } = await supabase.rpc('restore_work_item', { p_id: input.id });
       if (error) throw error;
     },
     onSuccess: (_d, input) => qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) }),

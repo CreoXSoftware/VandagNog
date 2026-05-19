@@ -87,6 +87,10 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, members, canE
           <DescField value={workItem.description ?? ''} disabled={!canEdit} onSave={(v) => patch({ description: v || null })} />
         </DisabledHint>
 
+        <DisabledHint disabled={!canEdit} reason={permReason}>
+          <DeliverableField value={workItem.deliverable ?? ''} disabled={!canEdit} onSave={(v) => patch({ deliverable: v || null })} />
+        </DisabledHint>
+
         <div className="grid grid-cols-2 gap-3">
           <Field label={t('workItem.start')}>
             <DisabledHint disabled={!canEditDates} reason={dateReason}>
@@ -260,6 +264,25 @@ function DescField({ value, disabled, onSave }: { value: string; disabled: boole
         onBlur={() => v !== value && onSave(v)}
         placeholder={t('workItem.descriptionPlaceholder')}
         rows={3}
+      />
+    </div>
+  );
+}
+
+function DeliverableField({ value, disabled, onSave }: { value: string; disabled: boolean; onSave: (v: string) => void }) {
+  const [v, setV] = useState(value);
+  const t = useT();
+  useEffect(() => setV(value), [value]);
+  return (
+    <div>
+      <label className="block text-[11px] font-medium text-neutral-600 dark:text-neutral-400 mb-1 uppercase tracking-wide">{t('workItem.deliverable')}</label>
+      <Textarea
+        value={v}
+        disabled={disabled}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={() => v !== value && onSave(v)}
+        placeholder={t('workItem.deliverablePlaceholder')}
+        rows={2}
       />
     </div>
   );

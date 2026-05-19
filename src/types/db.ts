@@ -43,6 +43,7 @@ export interface WorkItem {
   level: WorkItemLevel;
   name: string;
   description: string | null;
+  deliverable: string | null;
   start_date: string | null;
   end_date: string | null;
   progress: number;

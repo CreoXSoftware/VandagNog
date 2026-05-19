@@ -81,6 +81,7 @@ export const af: Dict = {
     saved_toast: 'Profiel gestoor',
     firstNamePlaceholder: 'Jana',
     lastNamePlaceholder: 'van der Merwe',
+    backToProjects: 'Terug na projekte',
   },
   workItem: {
     level: {
@@ -112,6 +113,8 @@ export const af: Dict = {
     createdAt: 'Geskep: {date}',
     updatedAt: 'Opgedateer: {date}',
     descriptionPlaceholder: 'Markdown ondersteun',
+    deliverable: 'Aflewerbare',
+    deliverablePlaceholder: 'Wat gelewer word',
   },
   dependencies: {
     predecessors: 'Voorgangers',
