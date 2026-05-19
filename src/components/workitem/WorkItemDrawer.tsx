@@ -1,0 +1,278 @@
+import { useEffect, useState, useMemo } from 'react';
+import { Drawer } from '@/components/ui/Drawer';
+import { Badge } from '@/components/ui/Badge';
+import { Input, Textarea } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
+import { DisabledHint } from '@/components/ui/DisabledHint';
+import { toDateInput, formatDate } from '@/lib/utils';
+import type { Dependency, ProjectMember, WorkItem } from '@/types/db';
+import { useUpdateWorkItem } from '@/hooks/useWorkItems';
+import { DependencyEditor } from './DependencyEditor';
+import { CommentThread } from './CommentThread';
+import { toast } from 'sonner';
+import { Avatar } from '@/components/ui/Avatar';
+import { displayName } from '@/lib/userDisplay';
+import { useT } from '@/lib/i18n';
+
+interface Props {
+  workItem: WorkItem;
+  allItems: WorkItem[];
+  dependencies: Dependency[];
+  members: ProjectMember[];
+  canEdit: boolean;
+  onClose: () => void;
+  onNavigate: (id: string) => void;
+}
+
+export function WorkItemDrawer({ workItem, allItems, dependencies, members, canEdit, onClose, onNavigate }: Props) {
+  const update = useUpdateWorkItem();
+  const [tab, setTab] = useState<'details' | 'comments'>('details');
+  const t = useT();
+
+  const breadcrumb = useMemo(() => buildBreadcrumb(workItem, allItems), [workItem, allItems]);
+  const children = useMemo(() => allItems.filter((i) => i.parent_id === workItem.id), [allItems, workItem.id]);
+  const isLeaf = children.length === 0 && workItem.level !== 'epic';
+  const canEditDates = canEdit && isLeaf;
+  const permReason = !canEdit ? t('workItem.permReason') : null;
+  const dateReason = !canEdit
+    ? permReason
+    : !isLeaf
+      ? t('workItem.dateReason')
+      : null;
+
+  function patch(patch: Partial<WorkItem>) {
+    update.mutate(
+      { id: workItem.id, project_id: workItem.project_id, patch },
+      { onError: (e) => toast.error((e as Error).message) },
+    );
+  }
+
+  return (
+    <Drawer
+      open
+      onClose={onClose}
+      title={
+        <div className="flex items-center gap-2 text-xs">
+          {breadcrumb.map((b, i) => (
+            <span key={b.id} className="flex items-center gap-1">
+              {i > 0 && <span className="text-neutral-400 dark:text-neutral-500">›</span>}
+              {i < breadcrumb.length - 1 ? (
+                <button
+                  className="text-blue-600 dark:text-blue-400 hover:underline truncate max-w-[100px]"
+                  onClick={() => onNavigate(b.id)}
+                >
+                  {b.name}
+                </button>
+              ) : (
+                <span className="truncate max-w-[140px]">{b.name}</span>
+              )}
+            </span>
+          ))}
+        </div>
+      }
+    >
+      <div className="p-4 space-y-4">
+        <div className="flex items-center gap-2">
+          <Badge kind={workItem.level}>{t(`workItem.level.${workItem.level}`)}</Badge>
+          {!isLeaf && workItem.level !== 'epic' && (
+            <span className="text-[10px] text-neutral-500 dark:text-neutral-400">{t('workItem.rollupParent')}</span>
+          )}
+        </div>
+
+        <DisabledHint disabled={!canEdit} reason={permReason}>
+          <NameField value={workItem.name} disabled={!canEdit} onSave={(v) => patch({ name: v })} />
+        </DisabledHint>
+
+        <DisabledHint disabled={!canEdit} reason={permReason}>
+          <DescField value={workItem.description ?? ''} disabled={!canEdit} onSave={(v) => patch({ description: v || null })} />
+        </DisabledHint>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label={t('workItem.start')}>
+            <DisabledHint disabled={!canEditDates} reason={dateReason}>
+              <Input
+                type="date"
+                value={toDateInput(workItem.start_date)}
+                disabled={!canEditDates}
+                onChange={(e) => patch({ start_date: e.target.value || null })}
+              />
+            </DisabledHint>
+          </Field>
+          <Field label={t('workItem.end')}>
+            <DisabledHint disabled={!canEditDates} reason={dateReason}>
+              <Input
+                type="date"
+                value={toDateInput(workItem.end_date)}
+                disabled={!canEditDates}
+                onChange={(e) => patch({ end_date: e.target.value || null })}
+              />
+            </DisabledHint>
+          </Field>
+        </div>
+
+        <Field label={t('workItem.assignee')}>
+          <div className="flex items-center gap-2">
+            {workItem.assignee_id ? (
+              <Avatar user={members.find((m) => m.user_id === workItem.assignee_id)} size="sm" />
+            ) : (
+              <div className="h-6 w-6 rounded-full bg-neutral-100 dark:bg-neutral-800 border border-dashed border-neutral-300 dark:border-neutral-700" />
+            )}
+            <DisabledHint disabled={!canEdit} reason={permReason} className="flex-1">
+              <Select
+                disabled={!canEdit}
+                value={workItem.assignee_id ?? ''}
+                onChange={(e) => patch({ assignee_id: e.target.value || null })}
+                className="flex-1"
+              >
+                <option value="">{t('workItem.unassigned')}</option>
+                {members.map((m) => (
+                  <option key={m.user_id} value={m.user_id}>
+                    {displayName(m)}
+                  </option>
+                ))}
+              </Select>
+            </DisabledHint>
+          </div>
+        </Field>
+
+        <Field label={t('workItem.progress', { pct: workItem.progress })}>
+          <DisabledHint disabled={!canEditDates} reason={dateReason}>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              disabled={!canEditDates}
+              value={workItem.progress}
+              onChange={(e) => patch({ progress: Number(e.target.value) })}
+              className="w-full disabled:opacity-40"
+            />
+          </DisabledHint>
+        </Field>
+
+        <div className="border-t border-neutral-200 dark:border-neutral-800 -mx-4 px-4 pt-3">
+          <SectionHeader>{t('workItem.dependencies')}</SectionHeader>
+          <DependencyEditor
+            workItem={workItem}
+            allItems={allItems}
+            dependencies={dependencies}
+            canEdit={canEdit}
+            onNavigate={onNavigate}
+          />
+        </div>
+
+        {children.length > 0 && (
+          <div className="border-t border-neutral-200 dark:border-neutral-800 -mx-4 px-4 pt-3">
+            <SectionHeader>{t('workItem.children', { count: children.length })}</SectionHeader>
+            <div className="space-y-1">
+              {children.map((c) => (
+                <button
+                  key={c.id}
+                  onClick={() => onNavigate(c.id)}
+                  className="w-full text-left px-2 py-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center gap-2 text-sm"
+                >
+                  <Badge kind={c.level}>{t(`workItem.level.${c.level}`)}</Badge>
+                  <span className="flex-1 truncate">{c.name}</span>
+                  <span className="text-[11px] text-neutral-400 dark:text-neutral-500">{c.progress}%</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="border-t border-neutral-200 dark:border-neutral-800 -mx-4 px-4 pt-3">
+          <div className="flex gap-1 mb-2 bg-neutral-100 dark:bg-neutral-800 rounded p-0.5 w-fit text-xs">
+            <button
+              onClick={() => setTab('details')}
+              className={`px-3 h-6 rounded ${tab === 'details' ? 'bg-white dark:bg-neutral-900 shadow-sm' : ''}`}
+            >
+              {t('workItem.meta')}
+            </button>
+            <button
+              onClick={() => setTab('comments')}
+              className={`px-3 h-6 rounded ${tab === 'comments' ? 'bg-white dark:bg-neutral-900 shadow-sm' : ''}`}
+            >
+              {t('workItem.comments')}
+            </button>
+          </div>
+
+          {tab === 'details' && (
+            <div className="text-xs text-neutral-500 dark:text-neutral-400 space-y-1">
+              <div>{t('workItem.createdAt', { date: formatDate(workItem.created_at) })}</div>
+              <div>{t('workItem.updatedAt', { date: formatDate(workItem.updated_at) })}</div>
+            </div>
+          )}
+          {tab === 'comments' && (
+            <CommentThread
+              workItemId={workItem.id}
+              projectId={workItem.project_id}
+              members={members}
+              canEdit={canEdit}
+            />
+          )}
+        </div>
+      </div>
+    </Drawer>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-[11px] font-medium text-neutral-600 dark:text-neutral-400 mb-1 uppercase tracking-wide">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function SectionHeader({ children }: { children: React.ReactNode }) {
+  return <div className="text-[11px] font-medium text-neutral-600 dark:text-neutral-400 uppercase tracking-wide mb-2">{children}</div>;
+}
+
+function NameField({ value, disabled, onSave }: { value: string; disabled: boolean; onSave: (v: string) => void }) {
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  return (
+    <input
+      className="w-full text-xl font-semibold bg-transparent focus:outline-none focus:bg-neutral-50 dark:focus:bg-neutral-800 rounded px-1 py-0.5 disabled:opacity-60"
+      value={v}
+      disabled={disabled}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={() => v !== value && v.trim() && onSave(v.trim())}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+      }}
+    />
+  );
+}
+
+function DescField({ value, disabled, onSave }: { value: string; disabled: boolean; onSave: (v: string) => void }) {
+  const [v, setV] = useState(value);
+  const t = useT();
+  useEffect(() => setV(value), [value]);
+  return (
+    <div>
+      <label className="block text-[11px] font-medium text-neutral-600 dark:text-neutral-400 mb-1 uppercase tracking-wide">{t('common.description')}</label>
+      <Textarea
+        value={v}
+        disabled={disabled}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={() => v !== value && onSave(v)}
+        placeholder={t('workItem.descriptionPlaceholder')}
+        rows={3}
+      />
+    </div>
+  );
+}
+
+function buildBreadcrumb(item: WorkItem, all: WorkItem[]): WorkItem[] {
+  const path: WorkItem[] = [item];
+  let current = item;
+  while (current.parent_id) {
+    const parent = all.find((i) => i.id === current.parent_id);
+    if (!parent) break;
+    path.unshift(parent);
+    current = parent;
+  }
+  return path;
+}
