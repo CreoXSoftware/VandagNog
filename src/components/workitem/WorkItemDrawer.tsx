@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { Drawer } from '@/components/ui/Drawer';
 import { Badge } from '@/components/ui/Badge';
 import { Input, Textarea } from '@/components/ui/Input';
@@ -20,11 +20,13 @@ interface Props {
   dependencies: Dependency[];
   members: ProjectMember[];
   canEdit: boolean;
+  autoFocusName?: boolean;
+  onNameFocused?: () => void;
   onClose: () => void;
   onNavigate: (id: string) => void;
 }
 
-export function WorkItemDrawer({ workItem, allItems, dependencies, members, canEdit, onClose, onNavigate }: Props) {
+export function WorkItemDrawer({ workItem, allItems, dependencies, members, canEdit, autoFocusName, onNameFocused, onClose, onNavigate }: Props) {
   const update = useUpdateWorkItem();
   const [tab, setTab] = useState<'details' | 'comments'>('details');
   const t = useT();
@@ -80,7 +82,13 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, members, canE
         </div>
 
         <DisabledHint disabled={!canEdit} reason={permReason}>
-          <NameField value={workItem.name} disabled={!canEdit} onSave={(v) => patch({ name: v })} />
+          <NameField
+            value={workItem.name}
+            disabled={!canEdit}
+            autoFocus={autoFocusName}
+            onAutoFocused={onNameFocused}
+            onSave={(v) => patch({ name: v })}
+          />
         </DisabledHint>
 
         <DisabledHint disabled={!canEdit} reason={permReason}>
@@ -233,11 +241,32 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
   return <div className="text-[11px] font-medium text-neutral-600 dark:text-neutral-400 uppercase tracking-wide mb-2">{children}</div>;
 }
 
-function NameField({ value, disabled, onSave }: { value: string; disabled: boolean; onSave: (v: string) => void }) {
+function NameField({
+  value,
+  disabled,
+  autoFocus,
+  onAutoFocused,
+  onSave,
+}: {
+  value: string;
+  disabled: boolean;
+  autoFocus?: boolean;
+  onAutoFocused?: () => void;
+  onSave: (v: string) => void;
+}) {
   const [v, setV] = useState(value);
+  const ref = useRef<HTMLInputElement | null>(null);
   useEffect(() => setV(value), [value]);
+  useEffect(() => {
+    if (autoFocus && !disabled && ref.current) {
+      ref.current.focus();
+      ref.current.select();
+      onAutoFocused?.();
+    }
+  }, [autoFocus, disabled, onAutoFocused]);
   return (
     <input
+      ref={ref}
       className="w-full text-xl font-semibold bg-transparent focus:outline-none focus:bg-neutral-50 dark:focus:bg-neutral-800 rounded px-1 py-0.5 disabled:opacity-60"
       value={v}
       disabled={disabled}

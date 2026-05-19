@@ -42,6 +42,7 @@ interface Props {
   workItems: WorkItem[];
   selectedId?: string;
   onSelect: (id: string | undefined) => void;
+  onCreate: (id: string) => void;
   canEdit: boolean;
 }
 
@@ -71,7 +72,7 @@ const newLabelKey: Record<WorkItemLevel, TKey> = {
   subtask: 'workItem.newSubtask',
 };
 
-export function WorkItemTree({ projectId, workItems, selectedId, onSelect, canEdit }: Props) {
+export function WorkItemTree({ projectId, workItems, selectedId, onSelect, onCreate, canEdit }: Props) {
   const create = useCreateWorkItem();
   const tree = useMemo(() => buildTree(workItems), [workItems]);
   const t = useT();
@@ -90,7 +91,7 @@ export function WorkItemTree({ projectId, workItems, selectedId, onSelect, canEd
         level: 'epic',
         name: t(newLabelKey.epic),
       });
-      onSelect(res.id);
+      onCreate(res.id);
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -117,7 +118,7 @@ export function WorkItemTree({ projectId, workItems, selectedId, onSelect, canEd
             projectId={projectId}
             selected={selectedItem}
             onClose={() => setQuickOpen(false)}
-            onLastCreated={(id) => onSelect(id)}
+            onLastCreated={(id) => onCreate(id)}
           />
         )}
         {tree.length === 0 && (
@@ -132,6 +133,7 @@ export function WorkItemTree({ projectId, workItems, selectedId, onSelect, canEd
             depth={0}
             selectedId={selectedId}
             onSelect={onSelect}
+            onCreate={onCreate}
             projectId={projectId}
             canEdit={canEdit}
           />
@@ -146,6 +148,7 @@ interface RowProps {
   depth: number;
   selectedId?: string;
   onSelect: (id: string) => void;
+  onCreate: (id: string) => void;
   projectId: string;
   canEdit: boolean;
 }
@@ -156,7 +159,7 @@ const nextLevel: Record<WorkItemLevel, WorkItemLevel | null> = {
   subtask: null,
 };
 
-function TreeRow({ node, depth, selectedId, onSelect, projectId, canEdit }: RowProps) {
+function TreeRow({ node, depth, selectedId, onSelect, onCreate, projectId, canEdit }: RowProps) {
   const [open, setOpen] = useState(true);
   const create = useCreateWorkItem();
   const del = useDeleteWorkItem();
@@ -173,7 +176,7 @@ function TreeRow({ node, depth, selectedId, onSelect, projectId, canEdit }: RowP
         name: t(newLabelKey[childLevel]),
       });
       setOpen(true);
-      onSelect(r.id);
+      onCreate(r.id);
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -249,6 +252,7 @@ function TreeRow({ node, depth, selectedId, onSelect, projectId, canEdit }: RowP
           depth={depth + 1}
           selectedId={selectedId}
           onSelect={onSelect}
+          onCreate={onCreate}
           projectId={projectId}
           canEdit={canEdit}
         />

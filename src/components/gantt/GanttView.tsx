@@ -99,18 +99,21 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
       const changed =
         toDateString(final.previewStart) !== toDateString(final.origStart) ||
         toDateString(final.previewEnd) !== toDateString(final.origEnd);
-      setDrag(null);
-      if (changed) {
-        try {
-          await reschedule.mutateAsync({
-            project_id: projectId,
-            work_item_id: final.id,
-            new_start: toDateString(final.previewStart),
-            new_end: toDateString(final.previewEnd),
-          });
-        } catch (e) {
-          toast.error((e as Error).message);
-        }
+      if (!changed) {
+        setDrag(null);
+        return;
+      }
+      try {
+        await reschedule.mutateAsync({
+          project_id: projectId,
+          work_item_id: final.id,
+          new_start: toDateString(final.previewStart),
+          new_end: toDateString(final.previewEnd),
+        });
+      } catch (e) {
+        toast.error((e as Error).message);
+      } finally {
+        setDrag(null);
       }
     }
     window.addEventListener('pointermove', onMove);

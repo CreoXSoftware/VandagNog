@@ -124,6 +124,24 @@ export function useRescheduleFrom() {
       });
       if (error) throw error;
     },
-    onSuccess: (_d, input) => qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) }),
+    onMutate: async (input) => {
+      await qc.cancelQueries({ queryKey: workItemsKey(input.project_id) });
+      const prev = qc.getQueryData<WorkItem[]>(workItemsKey(input.project_id));
+      if (prev) {
+        qc.setQueryData<WorkItem[]>(
+          workItemsKey(input.project_id),
+          prev.map((wi) =>
+            wi.id === input.work_item_id
+              ? { ...wi, start_date: input.new_start, end_date: input.new_end }
+              : wi,
+          ),
+        );
+      }
+      return { prev };
+    },
+    onError: (_e, input, ctx) => {
+      if (ctx?.prev) qc.setQueryData(workItemsKey(input.project_id), ctx.prev);
+    },
+    onSettled: (_d, _e, input) => qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) }),
   });
 }

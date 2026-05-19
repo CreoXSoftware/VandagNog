@@ -25,6 +25,7 @@ export function ProjectPage() {
   useProjectRealtime(projectId);
 
   const [editOpen, setEditOpen] = useState(false);
+  const [createdId, setCreatedId] = useState<string | null>(null);
   const { data: project } = useProject(projectId);
   const { data: workItems = [] } = useWorkItems(projectId);
   const { data: dependencies = [] } = useDependencies(projectId);
@@ -40,6 +41,11 @@ export function ProjectPage() {
 
   function selectItem(id: string | undefined) {
     nav({ to: '/projects/$projectId', params: { projectId }, search: { ...search, item: id } });
+  }
+
+  function createdItem(id: string) {
+    setCreatedId(id);
+    selectItem(id);
   }
 
   if (!project) {
@@ -100,6 +106,7 @@ export function ProjectPage() {
             projectId={projectId}
             workItems={workItems}
             onSelect={selectItem}
+            onCreate={createdItem}
             canEdit={canEdit}
             selectedId={search.item}
           />
@@ -126,6 +133,8 @@ export function ProjectPage() {
           dependencies={dependencies}
           members={members}
           canEdit={canEdit}
+          autoFocusName={createdId === selectedItem.id}
+          onNameFocused={() => setCreatedId(null)}
           onClose={() => selectItem(undefined)}
           onNavigate={(id) => selectItem(id)}
         />
