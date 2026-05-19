@@ -32,7 +32,10 @@ export function useAuth(): AuthState {
 export async function signInWithEmail(email: string, redirectTo?: string) {
   return supabase.auth.signInWithOtp({
     email,
-    options: { emailRedirectTo: redirectTo ?? window.location.origin },
+    options: {
+      emailRedirectTo:
+        redirectTo ?? window.location.origin + import.meta.env.BASE_URL + 'auth/callback',
+    },
   });
 }
 
