@@ -104,6 +104,7 @@ export function createAppRouter(queryClient: QueryClient) {
     routeTree,
     context: { queryClient },
     defaultPreload: 'intent',
+    basepath: import.meta.env.BASE_URL.replace(/\/$/, '') || '/',
   });
 }
 
