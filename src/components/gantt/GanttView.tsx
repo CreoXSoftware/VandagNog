@@ -1,5 +1,5 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
 import type { Dependency, WorkItem } from '@/types/db';
 import { useRescheduleFrom } from '@/hooks/useWorkItems';
 import { toast } from 'sonner';
@@ -67,19 +67,78 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
   const scrollRef = useRef<HTMLDivElement>(null);
   const today = startOfDay(new Date());
 
+  const ZOOM_MIN = 6;
+  const ZOOM_MAX = 80;
+  const [dayWidth, setDayWidth] = useState(DAY_WIDTH);
+  const dayWidthRef = useRef(dayWidth);
+  useEffect(() => { dayWidthRef.current = dayWidth; }, [dayWidth]);
+
+  const [viewportWidth, setViewportWidth] = useState(0);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setViewportWidth(el.clientWidth);
+    const ro = new ResizeObserver(() => setViewportWidth(el.clientWidth));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // View extends well past project bounds so user can scroll into empty months
+  const PAD_DAYS_LEFT = 180;
+  const PAD_DAYS_RIGHT = 365;
+  const viewStart = useMemo(() => addDays(range.start, -PAD_DAYS_LEFT), [range.start]);
+  const baseDays = range.days + PAD_DAYS_LEFT + PAD_DAYS_RIGHT;
+  const effectiveDays = Math.max(baseDays, Math.ceil(viewportWidth / dayWidth));
+
   // Center on today initially
   useEffect(() => {
     if (!scrollRef.current) return;
-    const todayX = diffDays(today, range.start) * DAY_WIDTH;
+    const todayX = diffDays(today, viewStart) * dayWidth;
     scrollRef.current.scrollLeft = Math.max(0, todayX - 200);
-  }, [range.start.getTime()]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [viewStart.getTime()]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function zoomAt(factor: number, anchorClientX?: number) {
+    const el = scrollRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const ax = anchorClientX != null ? anchorClientX - rect.left : el.clientWidth / 2;
+    const cur = dayWidthRef.current;
+    const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, cur * factor));
+    if (next === cur) return;
+    const dayAtAnchor = (el.scrollLeft + ax) / cur;
+    setDayWidth(next);
+    requestAnimationFrame(() => {
+      if (!scrollRef.current) return;
+      scrollRef.current.scrollLeft = dayAtAnchor * next - ax;
+    });
+  }
+
+  // Non-passive wheel listener: needed so preventDefault on ctrl/meta+wheel actually blocks browser zoom.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+        zoomAt(factor, e.clientX);
+        return;
+      }
+      if (e.shiftKey && e.deltaY !== 0 && e.deltaX === 0) {
+        e.preventDefault();
+        el!.scrollLeft += e.deltaY;
+      }
+    }
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
 
   // Drag handlers
   useEffect(() => {
     if (!drag) return;
     function onMove(e: PointerEvent) {
       const dx = e.clientX - drag!.startX;
-      const deltaDays = Math.round(dx / DAY_WIDTH);
+      const deltaDays = Math.round(dx / dayWidthRef.current);
       let ns = drag!.origStart;
       let ne = drag!.origEnd;
       if (drag!.mode === 'move') {
@@ -94,27 +153,22 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
       }
       setDrag({ ...drag!, previewStart: ns, previewEnd: ne });
     }
-    async function onUp() {
+    function onUp() {
       const final = drag!;
       const changed =
         toDateString(final.previewStart) !== toDateString(final.origStart) ||
         toDateString(final.previewEnd) !== toDateString(final.origEnd);
-      if (!changed) {
-        setDrag(null);
-        return;
-      }
-      try {
-        await reschedule.mutateAsync({
+      setDrag(null);
+      if (!changed) return;
+      reschedule.mutate(
+        {
           project_id: projectId,
           work_item_id: final.id,
           new_start: toDateString(final.previewStart),
           new_end: toDateString(final.previewEnd),
-        });
-      } catch (e) {
-        toast.error((e as Error).message);
-      } finally {
-        setDrag(null);
-      }
+        },
+        { onError: (e) => toast.error((e as Error).message) },
+      );
     }
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -159,7 +213,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
     });
   }
 
-  const totalWidth = range.days * DAY_WIDTH;
+  const totalWidth = effectiveDays * dayWidth;
   const totalHeight = HEADER_HEIGHT + flatRows.length * ROW_HEIGHT;
 
   // Position helpers
@@ -171,12 +225,12 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
     const s = isDragging ? drag!.previewStart : parseDate(row.item.start_date);
     const en = isDragging ? drag!.previewEnd : parseDate(row.item.end_date);
     if (!s || !en) return null;
-    const x = diffDays(s, range.start) * DAY_WIDTH;
-    const w = (diffDays(en, s) + 1) * DAY_WIDTH;
+    const x = diffDays(s, viewStart) * dayWidth;
+    const w = (diffDays(en, s) + 1) * dayWidth;
     return { x, w };
   }
 
-  const todayX = diffDays(today, range.start) * DAY_WIDTH;
+  const todayX = diffDays(today, viewStart) * dayWidth;
 
   return (
     <div className="h-full flex flex-col bg-white dark:bg-neutral-900">
@@ -184,6 +238,33 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
         <button onClick={expandAll} className="px-2 h-7 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800">{t('gantt.expandAll')}</button>
         <button onClick={collapseAll} className="px-2 h-7 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800">{t('gantt.collapseAll')}</button>
         <div className="flex-1" />
+        <div className="flex items-center gap-1 mr-2">
+          <button
+            onClick={() => zoomAt(1 / 1.25)}
+            className="p-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-40"
+            disabled={dayWidth <= ZOOM_MIN}
+            aria-label="Zoom out"
+            title="Zoom out (Ctrl+wheel)"
+          >
+            <ZoomOut size={14} />
+          </button>
+          <button
+            onClick={() => setDayWidth(DAY_WIDTH)}
+            className="px-1.5 h-6 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 text-[10px] tabular-nums text-neutral-500 dark:text-neutral-400"
+            title="Reset zoom"
+          >
+            {Math.round((dayWidth / DAY_WIDTH) * 100)}%
+          </button>
+          <button
+            onClick={() => zoomAt(1.25)}
+            className="p-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-40"
+            disabled={dayWidth >= ZOOM_MAX}
+            aria-label="Zoom in"
+            title="Zoom in (Ctrl+wheel)"
+          >
+            <ZoomIn size={14} />
+          </button>
+        </div>
         <div className="text-neutral-500 dark:text-neutral-400">{t('gantt.visibleTotal', { visible: flatRows.length, total: workItems.length })}</div>
       </div>
       <div className="flex-1 overflow-hidden flex">
@@ -230,21 +311,21 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
         <div ref={scrollRef} className="flex-1 overflow-auto relative">
           <div className="relative" style={{ width: totalWidth, height: totalHeight }}>
             {/* Header: month + day strip */}
-            <TimelineHeader range={range} todayX={todayX} workingSet={workingSet} locale={locale} />
+            <TimelineHeader viewStart={viewStart} days={effectiveDays} dayWidth={dayWidth} todayX={todayX} workingSet={workingSet} locale={locale} />
 
             {/* Weekend & today background overlay */}
             <div
               className="absolute left-0 pointer-events-none"
               style={{ top: HEADER_HEIGHT, width: totalWidth, height: totalHeight - HEADER_HEIGHT }}
             >
-              {Array.from({ length: range.days }, (_, i) => {
-                const d = addDays(range.start, i);
+              {Array.from({ length: effectiveDays }, (_, i) => {
+                const d = addDays(viewStart, i);
                 const isWeekend = !workingSet.has(isoDow(d));
                 return isWeekend ? (
                   <div
                     key={i}
                     className="absolute top-0 bottom-0 bg-neutral-50 dark:bg-neutral-800/40"
-                    style={{ left: i * DAY_WIDTH, width: DAY_WIDTH }}
+                    style={{ left: i * dayWidth, width: dayWidth }}
                   />
                 ) : null;
               })}
@@ -252,7 +333,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
               {todayX >= 0 && todayX <= totalWidth && (
                 <div
                   className="absolute top-0 bottom-0 border-l-2 border-red-400"
-                  style={{ left: todayX + DAY_WIDTH / 2 }}
+                  style={{ left: todayX + dayWidth / 2 }}
                 />
               )}
             </div>
@@ -372,19 +453,19 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
   );
 }
 
-function TimelineHeader({ range, todayX, workingSet, locale }: { range: ReturnType<typeof computeRange>; todayX: number; workingSet: Set<number>; locale: string }) {
+function TimelineHeader({ viewStart, days, dayWidth, todayX, workingSet, locale }: { viewStart: Date; days: number; dayWidth: number; todayX: number; workingSet: Set<number>; locale: string }) {
   const months: { label: string; x: number; width: number }[] = [];
   let curMonthKey = '';
   let curStart = 0;
-  for (let i = 0; i < range.days; i++) {
-    const d = addDays(range.start, i);
+  for (let i = 0; i < days; i++) {
+    const d = addDays(viewStart, i);
     const key = `${d.getFullYear()}-${d.getMonth()}`;
     if (key !== curMonthKey) {
       if (curMonthKey) {
         months.push({
-          label: monthLabel(addDays(range.start, curStart), locale),
-          x: curStart * DAY_WIDTH,
-          width: (i - curStart) * DAY_WIDTH,
+          label: monthLabel(addDays(viewStart, curStart), locale),
+          x: curStart * dayWidth,
+          width: (i - curStart) * dayWidth,
         });
       }
       curMonthKey = key;
@@ -392,15 +473,17 @@ function TimelineHeader({ range, todayX, workingSet, locale }: { range: ReturnTy
     }
   }
   months.push({
-    label: monthLabel(addDays(range.start, curStart), locale),
-    x: curStart * DAY_WIDTH,
-    width: (range.days - curStart) * DAY_WIDTH,
+    label: monthLabel(addDays(viewStart, curStart), locale),
+    x: curStart * dayWidth,
+    width: (days - curStart) * dayWidth,
   });
+
+  const showDayNumbers = dayWidth >= 18;
 
   return (
     <div
       className="sticky top-0 z-10 bg-neutral-50 dark:bg-neutral-950 border-b border-neutral-200 dark:border-neutral-800"
-      style={{ height: HEADER_HEIGHT, width: range.days * DAY_WIDTH }}
+      style={{ height: HEADER_HEIGHT, width: days * dayWidth }}
     >
       <div className="relative border-b border-neutral-200 dark:border-neutral-800" style={{ height: HEADER_HEIGHT / 2 }}>
         {months.map((m, idx) => (
@@ -414,10 +497,10 @@ function TimelineHeader({ range, todayX, workingSet, locale }: { range: ReturnTy
         ))}
       </div>
       <div className="relative" style={{ height: HEADER_HEIGHT / 2 }}>
-        {Array.from({ length: range.days }, (_, i) => {
-          const d = addDays(range.start, i);
+        {Array.from({ length: days }, (_, i) => {
+          const d = addDays(viewStart, i);
           const weekend = !workingSet.has(isoDow(d));
-          const isToday = i * DAY_WIDTH === todayX;
+          const isToday = i * dayWidth === todayX;
           return (
             <div
               key={i}
@@ -426,9 +509,9 @@ function TimelineHeader({ range, todayX, workingSet, locale }: { range: ReturnTy
                 weekend && 'text-neutral-400 dark:text-neutral-500 bg-neutral-100 dark:bg-neutral-800/60',
                 isToday && 'bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400 font-semibold',
               )}
-              style={{ left: i * DAY_WIDTH, width: DAY_WIDTH }}
+              style={{ left: i * dayWidth, width: dayWidth }}
             >
-              {d.getDate()}
+              {showDayNumbers ? d.getDate() : ''}
             </div>
           );
         })}

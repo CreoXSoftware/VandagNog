@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import { Select } from '@/components/ui/Select';
 import { Input } from '@/components/ui/Input';
@@ -123,6 +123,58 @@ export function DependencyEditor({ workItem, allItems, dependencies, canEdit, on
   );
 }
 
+function LagInput({ value, disabled, onCommit }: { value: number; disabled: boolean; onCommit: (v: number) => void }) {
+  const [v, setV] = useState(String(value));
+  const timerRef = useRef<number | null>(null);
+  useEffect(() => setV(String(value)), [value]);
+  useEffect(() => () => { if (timerRef.current != null) window.clearTimeout(timerRef.current); }, []);
+
+  function tryCommit(text: string) {
+    if (text.trim() === '') return;
+    const n = Number(text);
+    if (!Number.isFinite(n) || !Number.isInteger(n)) return;
+    if (n === value) return;
+    onCommit(n);
+  }
+
+  function handleChange(next: string) {
+    setV(next);
+    if (timerRef.current != null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      tryCommit(next);
+    }, 400);
+  }
+
+  function flush() {
+    if (timerRef.current != null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    tryCommit(v);
+    if (Number(v) !== value && !Number.isFinite(Number(v))) setV(String(value));
+  }
+
+  return (
+    <Input
+      type="number"
+      value={v}
+      disabled={disabled}
+      onChange={(e) => handleChange(e.target.value)}
+      onBlur={flush}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+        if (e.key === 'Escape') {
+          if (timerRef.current != null) window.clearTimeout(timerRef.current);
+          setV(String(value));
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+      className="h-6 w-12 text-[10px] px-1"
+    />
+  );
+}
+
 interface DepListProps {
   label: string;
   rows: Dependency[];
@@ -182,12 +234,10 @@ function DepList({ label, rows, otherKey, itemMap, canEdit, onNavigate, onDelete
                   disabled={!canEdit}
                   reason={canEdit ? null : t('workItem.permReason')}
                 >
-                  <Input
-                    type="number"
+                  <LagInput
                     value={d.lag_days}
                     disabled={!canEdit}
-                    onChange={(e) => onUpdate(d, { lag_days: Number(e.target.value) })}
-                    className="h-6 w-12 text-[10px] px-1"
+                    onCommit={(v) => onUpdate(d, { lag_days: v })}
                   />
                 </DisabledHint>
                 {canEdit && (

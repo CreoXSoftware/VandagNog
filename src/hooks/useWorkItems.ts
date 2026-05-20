@@ -1,6 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useRef } from 'react';
 import { supabase } from '@/lib/supabase';
-import type { WorkItem, WorkItemLevel } from '@/types/db';
+import type { Dependency, Project, WorkItem, WorkItemLevel } from '@/types/db';
+import { computeCascade, computeIncomingLagUpdates, type LagUpdate } from '@/lib/cascade';
+import { markLocalWorkItemMutation } from '@/lib/localMutationGuard';
+import { dependenciesKey } from './useDependencies';
+import { projectKey } from './useProjects';
 
 export const workItemsKey = (projectId: string) => ['work_items', projectId] as const;
 
@@ -115,6 +120,7 @@ export function useRestoreWorkItem() {
 
 export function useRescheduleFrom() {
   const qc = useQueryClient();
+  const pendingLagUpdatesRef = useRef<LagUpdate[]>([]);
   return useMutation({
     mutationFn: async (input: { project_id: string; work_item_id: string; new_start: string; new_end: string }) => {
       const { error } = await supabase.rpc('reschedule_from', {
@@ -123,25 +129,78 @@ export function useRescheduleFrom() {
         p_new_end: input.new_end,
       });
       if (error) throw error;
+
+      const lagUpdates = pendingLagUpdatesRef.current;
+      pendingLagUpdatesRef.current = [];
+      for (const u of lagUpdates) {
+        const { error: depErr } = await supabase
+          .from('dependencies')
+          .update({ lag_days: u.lag_days })
+          .eq('id', u.id);
+        if (depErr) throw depErr;
+      }
     },
     onMutate: async (input) => {
-      await qc.cancelQueries({ queryKey: workItemsKey(input.project_id) });
+      markLocalWorkItemMutation();
+      await Promise.all([
+        qc.cancelQueries({ queryKey: workItemsKey(input.project_id) }),
+        qc.cancelQueries({ queryKey: dependenciesKey(input.project_id) }),
+      ]);
       const prev = qc.getQueryData<WorkItem[]>(workItemsKey(input.project_id));
-      if (prev) {
-        qc.setQueryData<WorkItem[]>(
-          workItemsKey(input.project_id),
-          prev.map((wi) =>
-            wi.id === input.work_item_id
-              ? { ...wi, start_date: input.new_start, end_date: input.new_end }
-              : wi,
-          ),
+      const prevDeps = qc.getQueryData<Dependency[]>(dependenciesKey(input.project_id)) ?? [];
+      if (!prev) return { prev, prevDeps };
+
+      const project = qc.getQueryData<Project>(projectKey(input.project_id));
+      const workingSet = new Set(project?.working_days ?? [1, 2, 3, 4, 5]);
+
+      const result = computeCascade({
+        rootId: input.work_item_id,
+        newStart: input.new_start,
+        newEnd: input.new_end,
+        items: prev,
+        dependencies: prevDeps,
+        workingDays: workingSet,
+      });
+
+      const lagUpdates = computeIncomingLagUpdates({
+        rootId: input.work_item_id,
+        newStart: input.new_start,
+        newEnd: input.new_end,
+        items: prev,
+        dependencies: prevDeps,
+        workingDays: workingSet,
+      });
+      pendingLagUpdatesRef.current = lagUpdates;
+
+      qc.setQueryData<WorkItem[]>(
+        workItemsKey(input.project_id),
+        prev.map((wi) => {
+          const p = result.patches.get(wi.id);
+          return p ? ({ ...wi, ...p } as WorkItem) : wi;
+        }),
+      );
+
+      if (lagUpdates.length > 0) {
+        const lagMap = new Map(lagUpdates.map((u) => [u.id, u.lag_days]));
+        qc.setQueryData<Dependency[]>(
+          dependenciesKey(input.project_id),
+          prevDeps.map((d) => {
+            const lag = lagMap.get(d.id);
+            return lag != null ? { ...d, lag_days: lag } : d;
+          }),
         );
       }
-      return { prev };
+
+      return { prev, prevDeps };
     },
     onError: (_e, input, ctx) => {
+      pendingLagUpdatesRef.current = [];
       if (ctx?.prev) qc.setQueryData(workItemsKey(input.project_id), ctx.prev);
+      if (ctx?.prevDeps) qc.setQueryData(dependenciesKey(input.project_id), ctx.prevDeps);
     },
-    onSettled: (_d, _e, input) => qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) }),
+    onSuccess: () => {
+      markLocalWorkItemMutation();
+    },
+    // No onSettled invalidate — optimistic cascade + lag IS authoritative; matches server exactly.
   });
 }

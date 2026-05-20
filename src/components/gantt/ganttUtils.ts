@@ -90,3 +90,22 @@ export function addWorkingDays(d: Date, n: number, workingDays: Set<number>): Da
   }
   return cur;
 }
+
+// Count working-day hops walking from `from` to `to`, signed (negative if backward).
+// Excludes `from`, includes `to` if it falls on a working day.
+export function workingDayHops(from: Date, to: Date, workingDays: Set<number>): number {
+  if (from.getTime() === to.getTime()) return 0;
+  const forward = to.getTime() > from.getTime();
+  const step = forward ? 1 : -1;
+  let cur = from;
+  let count = 0;
+  const max = 365 * 50;
+  for (let i = 0; i < max; i++) {
+    cur = addDays(cur, step);
+    if (workingDays.has(isoDow(cur))) count += 1;
+    if (cur.getTime() === to.getTime()) break;
+    if (forward && cur > to) break;
+    if (!forward && cur < to) break;
+  }
+  return forward ? count : -count;
+}

@@ -131,6 +131,7 @@ export function ProjectPage() {
           workItem={selectedItem}
           allItems={workItems}
           dependencies={dependencies}
+          workingDays={project.working_days}
           members={members}
           canEdit={canEdit}
           autoFocusName={createdId === selectedItem.id}
