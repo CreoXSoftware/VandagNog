@@ -1,4 +1,4 @@
-import { addWorkingDays, countWorkingDays, diffDays, parseDate, toDateString, workingDayHops } from '@/components/gantt/ganttUtils';
+import { addWorkingDays, countWorkingDays, diffDays, parseDate, toDateString, workingDayHops, type WorkCalendar } from '@/components/gantt/ganttUtils';
 import type { Dependency, WorkItem } from '@/types/db';
 
 export type WorkItemPatch = Partial<Pick<WorkItem, 'start_date' | 'end_date' | 'progress'>>;
@@ -14,7 +14,7 @@ interface ComputeArgs {
   newEnd: string;
   items: WorkItem[];
   dependencies: Dependency[];
-  workingDays: Set<number>;
+  calendar: WorkCalendar;
 }
 
 export function computeCascade({
@@ -23,7 +23,7 @@ export function computeCascade({
   newEnd,
   items,
   dependencies,
-  workingDays,
+  calendar,
 }: ComputeArgs): CascadeResult {
   const itemMap = new Map(items.map((i) => [i.id, i]));
   if (!itemMap.has(rootId)) return { patches: new Map(), error: 'Work item not found' };
@@ -73,27 +73,27 @@ export function computeCascade({
       const succStartCur = parseDate(succ.start_date);
       const succEndCur = parseDate(succ.end_date);
       const workDayDur = succStartCur && succEndCur
-        ? Math.max(countWorkingDays(succStartCur, succEndCur, workingDays) - 1, 0)
+        ? Math.max(countWorkingDays(succStartCur, succEndCur, calendar) - 1, 0)
         : 0;
 
       let nextStart: Date;
       let nextEnd: Date;
       switch (dep.type) {
         case 'FS':
-          nextStart = addWorkingDays(predEnd, dep.lag_days + 1, workingDays);
-          nextEnd = addWorkingDays(nextStart, workDayDur, workingDays);
+          nextStart = addWorkingDays(predEnd, dep.lag_days + 1, calendar);
+          nextEnd = addWorkingDays(nextStart, workDayDur, calendar);
           break;
         case 'FF':
-          nextEnd = addWorkingDays(predEnd, dep.lag_days, workingDays);
-          nextStart = addWorkingDays(nextEnd, -workDayDur, workingDays);
+          nextEnd = addWorkingDays(predEnd, dep.lag_days, calendar);
+          nextStart = addWorkingDays(nextEnd, -workDayDur, calendar);
           break;
         case 'SS':
-          nextStart = addWorkingDays(predStart, dep.lag_days, workingDays);
-          nextEnd = addWorkingDays(nextStart, workDayDur, workingDays);
+          nextStart = addWorkingDays(predStart, dep.lag_days, calendar);
+          nextEnd = addWorkingDays(nextStart, workDayDur, calendar);
           break;
         case 'SF':
-          nextEnd = addWorkingDays(predStart, dep.lag_days, workingDays);
-          nextStart = addWorkingDays(nextEnd, -workDayDur, workingDays);
+          nextEnd = addWorkingDays(predStart, dep.lag_days, calendar);
+          nextStart = addWorkingDays(nextEnd, -workDayDur, calendar);
           break;
       }
 
@@ -172,7 +172,7 @@ export function computeSuccessorPositionFromDep(
   dep: Dependency,
   pred: WorkItem,
   succ: WorkItem,
-  workingDays: Set<number>,
+  calendar: WorkCalendar,
 ): { newStart: string; newEnd: string } | null {
   const predStart = parseDate(pred.start_date);
   const predEnd = parseDate(pred.end_date);
@@ -181,27 +181,27 @@ export function computeSuccessorPositionFromDep(
   const succStartCur = parseDate(succ.start_date);
   const succEndCur = parseDate(succ.end_date);
   const workDayDur = succStartCur && succEndCur
-    ? Math.max(countWorkingDays(succStartCur, succEndCur, workingDays) - 1, 0)
+    ? Math.max(countWorkingDays(succStartCur, succEndCur, calendar) - 1, 0)
     : 0;
 
   let nextStart: Date;
   let nextEnd: Date;
   switch (dep.type) {
     case 'FS':
-      nextStart = addWorkingDays(predEnd, dep.lag_days + 1, workingDays);
-      nextEnd = addWorkingDays(nextStart, workDayDur, workingDays);
+      nextStart = addWorkingDays(predEnd, dep.lag_days + 1, calendar);
+      nextEnd = addWorkingDays(nextStart, workDayDur, calendar);
       break;
     case 'FF':
-      nextEnd = addWorkingDays(predEnd, dep.lag_days, workingDays);
-      nextStart = addWorkingDays(nextEnd, -workDayDur, workingDays);
+      nextEnd = addWorkingDays(predEnd, dep.lag_days, calendar);
+      nextStart = addWorkingDays(nextEnd, -workDayDur, calendar);
       break;
     case 'SS':
-      nextStart = addWorkingDays(predStart, dep.lag_days, workingDays);
-      nextEnd = addWorkingDays(nextStart, workDayDur, workingDays);
+      nextStart = addWorkingDays(predStart, dep.lag_days, calendar);
+      nextEnd = addWorkingDays(nextStart, workDayDur, calendar);
       break;
     case 'SF':
-      nextEnd = addWorkingDays(predStart, dep.lag_days, workingDays);
-      nextStart = addWorkingDays(nextEnd, -workDayDur, workingDays);
+      nextEnd = addWorkingDays(predStart, dep.lag_days, calendar);
+      nextStart = addWorkingDays(nextEnd, -workDayDur, calendar);
       break;
   }
   return { newStart: toDateString(nextStart), newEnd: toDateString(nextEnd) };
@@ -218,7 +218,7 @@ interface LagArgs {
   newEnd: string;
   items: WorkItem[];
   dependencies: Dependency[];
-  workingDays: Set<number>;
+  calendar: WorkCalendar;
 }
 
 // Compute new lag_days for each dependency where the moved item is the successor,
@@ -229,7 +229,7 @@ export function computeIncomingLagUpdates({
   newEnd,
   items,
   dependencies,
-  workingDays,
+  calendar,
 }: LagArgs): LagUpdate[] {
   const itemMap = new Map(items.map((i) => [i.id, i]));
   const succStart = parseDate(newStart);
@@ -248,16 +248,16 @@ export function computeIncomingLagUpdates({
     let newLag: number;
     switch (dep.type) {
       case 'FS':
-        newLag = workingDayHops(predEnd, succStart, workingDays) - 1;
+        newLag = workingDayHops(predEnd, succStart, calendar) - 1;
         break;
       case 'SS':
-        newLag = workingDayHops(predStart, succStart, workingDays);
+        newLag = workingDayHops(predStart, succStart, calendar);
         break;
       case 'FF':
-        newLag = workingDayHops(predEnd, succEnd, workingDays);
+        newLag = workingDayHops(predEnd, succEnd, calendar);
         break;
       case 'SF':
-        newLag = workingDayHops(predStart, succEnd, workingDays);
+        newLag = workingDayHops(predStart, succEnd, calendar);
         break;
     }
     if (newLag !== dep.lag_days) {

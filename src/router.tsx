@@ -79,7 +79,7 @@ const profileRoute = createRoute({
 
 interface ProjectSearch {
   item?: string;
-  view?: 'gantt' | 'members';
+  view?: 'gantt' | 'calendar' | 'members';
   tab?: 'details' | 'comments';
 }
 
@@ -88,7 +88,7 @@ const projectRoute = createRoute({
   path: '/projects/$projectId',
   validateSearch: (s: Record<string, unknown>): ProjectSearch => ({
     item: typeof s.item === 'string' ? s.item : undefined,
-    view: s.view === 'gantt' || s.view === 'members' ? s.view : undefined,
+    view: s.view === 'gantt' || s.view === 'calendar' || s.view === 'members' ? s.view : undefined,
     tab: s.tab === 'details' || s.tab === 'comments' ? s.tab : undefined,
   }),
   component: ProjectPage,

@@ -63,12 +63,24 @@ export function computeRange(items: WorkItem[]): DateRange {
   return { start: min, end: max, days: diffDays(max, min) + 1 };
 }
 
-export function countWorkingDays(start: Date, end: Date, workingDays: Set<number>): number {
+// Work calendar: weekly working days plus per-project non-working dates.
+export interface WorkCalendar {
+  weekly: Set<number>;
+  nonWorking: Set<string>;
+}
+
+export function isWorkingDay(d: Date, cal: WorkCalendar): boolean {
+  if (!cal.weekly.has(isoDow(d))) return false;
+  if (cal.nonWorking.has(toDateString(d))) return false;
+  return true;
+}
+
+export function countWorkingDays(start: Date, end: Date, cal: WorkCalendar): number {
   if (end < start) return 0;
   const total = diffDays(end, start) + 1;
   let count = 0;
   for (let i = 0; i < total; i++) {
-    if (workingDays.has(isoDow(addDays(start, i)))) count += 1;
+    if (isWorkingDay(addDays(start, i), cal)) count += 1;
   }
   return count;
 }
@@ -79,21 +91,21 @@ export function formatWorkDuration(workDays: number): string {
   return `${workDays}d`;
 }
 
-export function addWorkingDays(d: Date, n: number, workingDays: Set<number>): Date {
+export function addWorkingDays(d: Date, n: number, cal: WorkCalendar): Date {
   if (n === 0) return d;
   const step = n > 0 ? 1 : -1;
   let remaining = Math.abs(n);
   let cur = d;
   while (remaining > 0) {
     cur = addDays(cur, step);
-    if (workingDays.has(isoDow(cur))) remaining -= 1;
+    if (isWorkingDay(cur, cal)) remaining -= 1;
   }
   return cur;
 }
 
 // Count working-day hops walking from `from` to `to`, signed (negative if backward).
 // Excludes `from`, includes `to` if it falls on a working day.
-export function workingDayHops(from: Date, to: Date, workingDays: Set<number>): number {
+export function workingDayHops(from: Date, to: Date, cal: WorkCalendar): number {
   if (from.getTime() === to.getTime()) return 0;
   const forward = to.getTime() > from.getTime();
   const step = forward ? 1 : -1;
@@ -102,10 +114,37 @@ export function workingDayHops(from: Date, to: Date, workingDays: Set<number>): 
   const max = 365 * 50;
   for (let i = 0; i < max; i++) {
     cur = addDays(cur, step);
-    if (workingDays.has(isoDow(cur))) count += 1;
+    if (isWorkingDay(cur, cal)) count += 1;
     if (cur.getTime() === to.getTime()) break;
     if (forward && cur > to) break;
     if (!forward && cur < to) break;
   }
   return forward ? count : -count;
+}
+
+// Build the Set<string> of all individual non-working dates from a list of ranges.
+export function expandNonWorking(
+  ranges: { start_date: string; end_date: string }[],
+): Set<string> {
+  const out = new Set<string>();
+  for (const r of ranges) {
+    const s = parseDate(r.start_date);
+    const e = parseDate(r.end_date);
+    if (!s || !e) continue;
+    const n = diffDays(e, s);
+    for (let i = 0; i <= n; i++) {
+      out.add(toDateString(addDays(s, i)));
+    }
+  }
+  return out;
+}
+
+export function buildCalendar(
+  workingDays: number[],
+  nonWorkingRanges: { start_date: string; end_date: string }[],
+): WorkCalendar {
+  return {
+    weekly: new Set(workingDays),
+    nonWorking: expandNonWorking(nonWorkingRanges),
+  };
 }

@@ -1,4 +1,4 @@
-import { addWorkingDays, countWorkingDays, parseDate, toDateString } from '@/components/gantt/ganttUtils';
+import { addWorkingDays, countWorkingDays, parseDate, toDateString, type WorkCalendar } from '@/components/gantt/ganttUtils';
 
 export function parseDurationInput(input: string): number | null {
   const m = input.trim().toLowerCase().match(/^(\d+)\s*([dw])$/);
@@ -17,21 +17,21 @@ export function formatDurationWorkDays(workDays: number): string {
 export function workItemDurationLabel(
   start: string | null,
   end: string | null,
-  workingDays: Set<number>,
+  calendar: WorkCalendar,
 ): string {
   const s = parseDate(start);
   const e = parseDate(end);
   if (!s || !e) return '';
-  return formatDurationWorkDays(countWorkingDays(s, e, workingDays));
+  return formatDurationWorkDays(countWorkingDays(s, e, calendar));
 }
 
 export function endDateFromStartAndDuration(
   start: string,
   workDays: number,
-  workingDays: Set<number>,
+  calendar: WorkCalendar,
 ): string | null {
   const s = parseDate(start);
   if (!s) return null;
   const wd = Math.max(1, workDays);
-  return toDateString(addWorkingDays(s, wd - 1, workingDays));
+  return toDateString(addWorkingDays(s, wd - 1, calendar));
 }

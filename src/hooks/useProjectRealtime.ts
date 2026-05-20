@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase';
 import { workItemsKey } from './useWorkItems';
 import { dependenciesKey } from './useDependencies';
 import { membersKey } from './useMembers';
+import { nonWorkingDaysKey } from './useNonWorkingDays';
 import { projectKey } from './useProjects';
 import { recentLocalWorkItemMutation } from '@/lib/localMutationGuard';
 
@@ -53,6 +54,11 @@ export function useProjectRealtime(projectId: string | undefined) {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'projects', filter: `id=eq.${projectId}` },
         () => qc.invalidateQueries({ queryKey: projectKey(projectId) }),
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'non_working_days', filter: `project_id=eq.${projectId}` },
+        () => qc.invalidateQueries({ queryKey: nonWorkingDaysKey(projectId) }),
       )
       .subscribe();
 

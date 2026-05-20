@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
 import { supabase } from '@/lib/supabase';
-import type { Dependency, DependencyType, Project, WorkItem } from '@/types/db';
+import type { Dependency, DependencyType, NonWorkingDay, Project, WorkItem } from '@/types/db';
 import { computeCascade, computeSuccessorPositionFromDep } from '@/lib/cascade';
+import { buildCalendar } from '@/components/gantt/ganttUtils';
 import { markLocalWorkItemMutation } from '@/lib/localMutationGuard';
 import { workItemsKey } from './useWorkItems';
+import { nonWorkingDaysKey } from './useNonWorkingDays';
 import { projectKey } from './useProjects';
 
 export const dependenciesKey = (projectId: string) => ['dependencies', projectId] as const;
@@ -85,8 +87,9 @@ export function useUpdateDependency() {
       const succ = prev.find((w) => w.id === dep.successor_id);
       if (pred && succ) {
         const project = qc.getQueryData<Project>(projectKey(input.project_id));
-        const workingSet = new Set(project?.working_days ?? [1, 2, 3, 4, 5]);
-        const pos = computeSuccessorPositionFromDep(updatedDep, pred, succ, workingSet);
+        const nonWorking = qc.getQueryData<NonWorkingDay[]>(nonWorkingDaysKey(input.project_id)) ?? [];
+        const calendar = buildCalendar(project?.working_days ?? [1, 2, 3, 4, 5], nonWorking);
+        const pos = computeSuccessorPositionFromDep(updatedDep, pred, succ, calendar);
         if (pos && (pos.newStart !== succ.start_date || pos.newEnd !== succ.end_date)) {
           const result = computeCascade({
             rootId: succ.id,
@@ -94,7 +97,7 @@ export function useUpdateDependency() {
             newEnd: pos.newEnd,
             items: prev,
             dependencies: prevDeps,
-            workingDays: workingSet,
+            calendar,
           });
           qc.setQueryData<WorkItem[]>(
             workItemsKey(input.project_id),

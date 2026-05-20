@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
 import { supabase } from '@/lib/supabase';
-import type { Dependency, Project, WorkItem, WorkItemLevel } from '@/types/db';
+import type { Dependency, NonWorkingDay, Project, WorkItem, WorkItemLevel } from '@/types/db';
 import { computeCascade, computeIncomingLagUpdates, type LagUpdate } from '@/lib/cascade';
+import { buildCalendar } from '@/components/gantt/ganttUtils';
 import { markLocalWorkItemMutation } from '@/lib/localMutationGuard';
 import { dependenciesKey } from './useDependencies';
+import { nonWorkingDaysKey } from './useNonWorkingDays';
 import { projectKey } from './useProjects';
 
 export const workItemsKey = (projectId: string) => ['work_items', projectId] as const;
@@ -182,7 +184,8 @@ export function useRescheduleFrom() {
       if (!prev) return { prev, prevDeps };
 
       const project = qc.getQueryData<Project>(projectKey(input.project_id));
-      const workingSet = new Set(project?.working_days ?? [1, 2, 3, 4, 5]);
+      const nonWorking = qc.getQueryData<NonWorkingDay[]>(nonWorkingDaysKey(input.project_id)) ?? [];
+      const calendar = buildCalendar(project?.working_days ?? [1, 2, 3, 4, 5], nonWorking);
 
       const result = computeCascade({
         rootId: input.work_item_id,
@@ -190,7 +193,7 @@ export function useRescheduleFrom() {
         newEnd: input.new_end,
         items: prev,
         dependencies: prevDeps,
-        workingDays: workingSet,
+        calendar,
       });
 
       const lagUpdates = computeIncomingLagUpdates({
@@ -199,7 +202,7 @@ export function useRescheduleFrom() {
         newEnd: input.new_end,
         items: prev,
         dependencies: prevDeps,
-        workingDays: workingSet,
+        calendar,
       });
       pendingLagUpdatesRef.current = lagUpdates;
 

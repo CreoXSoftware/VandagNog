@@ -5,9 +5,11 @@ import { useProject } from '@/hooks/useProjects';
 import { useProjectRealtime } from '@/hooks/useProjectRealtime';
 import { useWorkItems } from '@/hooks/useWorkItems';
 import { useDependencies } from '@/hooks/useDependencies';
+import { useNonWorkingDays } from '@/hooks/useNonWorkingDays';
 import { useMembers, useMyRole } from '@/hooks/useMembers';
 import { WorkItemDrawer } from '@/components/workitem/WorkItemDrawer';
 import { GanttView } from '@/components/gantt/GanttView';
+import { CalendarView } from '@/components/calendar/CalendarView';
 import { MembersPanel } from '@/components/members/MembersPanel';
 import { EditProjectDialog } from '@/components/project/EditProjectDialog';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/Tooltip';
@@ -28,14 +30,15 @@ export function ProjectPage() {
   const { data: project } = useProject(projectId);
   const { data: workItems = [] } = useWorkItems(projectId);
   const { data: dependencies = [] } = useDependencies(projectId);
+  const { data: nonWorkingDays = [] } = useNonWorkingDays(projectId);
   const { data: members = [] } = useMembers(projectId);
   const { data: role } = useMyRole(projectId);
 
   const view = search.view ?? 'gantt';
   const selectedItem = search.item ? workItems.find((w) => w.id === search.item) : undefined;
 
-  function setView(v: 'gantt' | 'members') {
-    nav({ to: '/projects/$projectId', params: { projectId }, search: { ...search, view: v } });
+  function setView(v: 'gantt' | 'calendar' | 'members') {
+    nav({ to: '/projects/$projectId', params: { projectId }, search: { ...search, view: v, item: v === 'gantt' ? search.item : undefined } });
   }
 
   function selectItem(id: string | undefined) {
@@ -83,7 +86,7 @@ export function ProjectPage() {
           </button>
         )}
         <div className="absolute left-1/2 -translate-x-1/2 flex gap-1 bg-neutral-100 dark:bg-neutral-800 rounded p-0.5">
-          {(['gantt', 'members'] as const).map((v) => (
+          {(['gantt', 'calendar', 'members'] as const).map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -106,10 +109,19 @@ export function ProjectPage() {
             workItems={workItems}
             dependencies={dependencies}
             workingDays={project.working_days}
+            nonWorkingDays={nonWorkingDays}
             onSelect={selectItem}
             onCreate={createdItem}
             canEdit={canEdit}
             selectedId={search.item}
+          />
+        )}
+        {view === 'calendar' && (
+          <CalendarView
+            projectId={projectId}
+            workingDays={project.working_days}
+            nonWorkingDays={nonWorkingDays}
+            canEdit={canEdit}
           />
         )}
         {view === 'members' && (
@@ -123,6 +135,7 @@ export function ProjectPage() {
           allItems={workItems}
           dependencies={dependencies}
           workingDays={project.working_days}
+          nonWorkingDays={nonWorkingDays}
           members={members}
           canEdit={canEdit}
           autoFocusName={createdId === selectedItem.id}

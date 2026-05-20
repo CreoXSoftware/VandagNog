@@ -1,7 +1,7 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronRight, ZoomIn, ZoomOut, Plus, Trash2, ListPlus, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Dependency, WorkItem, WorkItemLevel } from '@/types/db';
+import type { Dependency, NonWorkingDay, WorkItem, WorkItemLevel } from '@/types/db';
 import { useCreateWorkItem, useDeleteWorkItem, useReorderWorkItems, useRescheduleFrom } from '@/hooks/useWorkItems';
 import { cn } from '@/lib/utils';
 import {
@@ -10,11 +10,12 @@ import {
   HEADER_HEIGHT,
   TREE_WIDTH,
   addDays,
+  buildCalendar,
   computeRange,
   countWorkingDays,
   diffDays,
   formatWorkDuration,
-  isoDow,
+  isWorkingDay,
   parseDate,
   startOfDay,
   toDateString,
@@ -29,6 +30,7 @@ interface Props {
   workItems: WorkItem[];
   dependencies: Dependency[];
   workingDays: number[];
+  nonWorkingDays: NonWorkingDay[];
   onSelect: (id: string) => void;
   onCreate: (id: string) => void;
   canEdit: boolean;
@@ -68,14 +70,14 @@ const TREE_WIDTH_MIN = 220;
 const TREE_WIDTH_MAX = 720;
 const TREE_WIDTH_KEY = 'gantt.treeWidth';
 
-export function GanttView({ projectId, workItems, dependencies, workingDays, onSelect, onCreate, canEdit, selectedId }: Props) {
+export function GanttView({ projectId, workItems, dependencies, workingDays, nonWorkingDays, onSelect, onCreate, canEdit, selectedId }: Props) {
   const reschedule = useRescheduleFrom();
   const create = useCreateWorkItem();
   const reorder = useReorderWorkItems();
   const t = useT();
   const { lang } = useI18n();
   const locale = lang === 'af' ? 'af-ZA' : 'en-US';
-  const workingSet = useMemo(() => new Set(workingDays), [workingDays]);
+  const calendar = useMemo(() => buildCalendar(workingDays, nonWorkingDays), [workingDays, nonWorkingDays]);
   const range = useMemo(() => computeRange(workItems), [workItems]);
 
   const [expanded, setExpanded] = useState<Set<string>>(() => {
@@ -84,6 +86,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
 
   const flatRows = useMemo(() => flatten(workItems, expanded), [workItems, expanded]);
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [createDrag, setCreateDrag] = useState<{ id: string; anchor: Date; previewStart: Date; previewEnd: Date } | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
   const [dragEpicId, setDragEpicId] = useState<string | null>(null);
   const [overEpic, setOverEpic] = useState<{ id: string; pos: 'before' | 'after' } | null>(null);
@@ -235,6 +238,59 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
       window.removeEventListener('pointerup', onUp);
     };
   }, [drag, projectId, reschedule]);
+
+  function clientXToDate(clientX: number): Date | null {
+    const el = scrollRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    const x = el.scrollLeft + (clientX - rect.left);
+    const dayIdx = Math.floor(x / dayWidthRef.current);
+    return addDays(viewStart, dayIdx);
+  }
+
+  // Create-by-drag on rows with no dates yet.
+  useEffect(() => {
+    if (!createDrag) return;
+    function onMove(e: PointerEvent) {
+      const d = clientXToDate(e.clientX);
+      if (!d) return;
+      setCreateDrag((s) => {
+        if (!s) return s;
+        const lo = d < s.anchor ? d : s.anchor;
+        const hi = d < s.anchor ? s.anchor : d;
+        return { ...s, previewStart: lo, previewEnd: hi };
+      });
+    }
+    function onUp() {
+      const final = createDrag!;
+      setCreateDrag(null);
+      reschedule.mutate(
+        {
+          project_id: projectId,
+          work_item_id: final.id,
+          new_start: toDateString(final.previewStart),
+          new_end: toDateString(final.previewEnd),
+        },
+        { onError: (e) => toast.error((e as Error).message) },
+      );
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [createDrag, projectId, reschedule]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function startCreateDrag(e: React.PointerEvent, row: FlatRow) {
+    if (!canEdit) return;
+    if (row.hasChildren || row.item.level === 'epic') return;
+    if (row.item.start_date && row.item.end_date) return;
+    const d = clientXToDate(e.clientX);
+    if (!d) return;
+    e.preventDefault();
+    setCreateDrag({ id: row.item.id, anchor: d, previewStart: d, previewEnd: d });
+  }
 
   function toggle(id: string) {
     setExpanded((prev) => {
@@ -484,7 +540,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
             {flatRows.map((r) => {
               const s = parseDate(r.item.start_date);
               const en = parseDate(r.item.end_date);
-              const wd = s && en ? countWorkingDays(s, en, workingSet) : 0;
+              const wd = s && en ? countWorkingDays(s, en, calendar) : 0;
               const childLevel = nextLevel[r.item.level];
               const isSelected = selectedId === r.item.id;
               const isEpic = r.item.level === 'epic';
@@ -567,7 +623,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
         <div ref={scrollRef} className="flex-1 overflow-auto relative">
           <div className="relative" style={{ width: totalWidth, height: totalHeight }}>
             {/* Header: month + day strip */}
-            <TimelineHeader viewStart={viewStart} days={effectiveDays} dayWidth={dayWidth} todayX={todayX} workingSet={workingSet} locale={locale} />
+            <TimelineHeader viewStart={viewStart} days={effectiveDays} dayWidth={dayWidth} todayX={todayX} calendar={calendar} locale={locale} />
 
             {/* Weekend & today background overlay */}
             <div
@@ -576,14 +632,20 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
             >
               {Array.from({ length: effectiveDays }, (_, i) => {
                 const d = addDays(viewStart, i);
-                const isWeekend = !workingSet.has(isoDow(d));
-                return isWeekend ? (
+                if (isWorkingDay(d, calendar)) return null;
+                const isHoliday = calendar.nonWorking.has(toDateString(d));
+                return (
                   <div
                     key={i}
-                    className="absolute top-0 bottom-0 bg-neutral-50 dark:bg-neutral-800/40"
+                    className={cn(
+                      'absolute top-0 bottom-0',
+                      isHoliday
+                        ? 'bg-amber-50 dark:bg-amber-900/20'
+                        : 'bg-neutral-50 dark:bg-neutral-800/40',
+                    )}
                     style={{ left: i * dayWidth, width: dayWidth }}
                   />
-                ) : null;
+                );
               })}
               {/* Today line */}
               {todayX >= 0 && todayX <= totalWidth && (
@@ -599,12 +661,35 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
               {flatRows.map((r) => {
                 const rect = barRect(r);
                 const isRollup = r.hasChildren || r.item.level === 'epic';
+                const canCreate =
+                  canEdit && !isRollup && !(r.item.start_date && r.item.end_date);
+                const creating = createDrag?.id === r.item.id;
+                const createRect = creating
+                  ? {
+                      x: diffDays(createDrag!.previewStart, viewStart) * dayWidth,
+                      w: (diffDays(createDrag!.previewEnd, createDrag!.previewStart) + 1) * dayWidth,
+                    }
+                  : null;
                 return (
                   <div
                     key={r.item.id}
-                    className="relative border-b border-neutral-100 dark:border-neutral-800"
+                    className={cn(
+                      'relative border-b border-neutral-100 dark:border-neutral-800',
+                      canCreate && !rect && 'cursor-crosshair',
+                    )}
                     style={{ height: ROW_HEIGHT }}
+                    onPointerDown={canCreate ? (e) => startCreateDrag(e, r) : undefined}
                   >
+                    {createRect && (
+                      <div
+                        className="absolute top-1 rounded bg-blue-400/70 border border-blue-600 pointer-events-none"
+                        style={{
+                          left: createRect.x,
+                          width: Math.max(createRect.w, 4),
+                          height: ROW_HEIGHT - 8,
+                        }}
+                      />
+                    )}
                     {rect && (
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -709,7 +794,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
   );
 }
 
-function TimelineHeader({ viewStart, days, dayWidth, todayX, workingSet, locale }: { viewStart: Date; days: number; dayWidth: number; todayX: number; workingSet: Set<number>; locale: string }) {
+function TimelineHeader({ viewStart, days, dayWidth, todayX, calendar, locale }: { viewStart: Date; days: number; dayWidth: number; todayX: number; calendar: import('./ganttUtils').WorkCalendar; locale: string }) {
   const months: { label: string; x: number; width: number }[] = [];
   let curMonthKey = '';
   let curStart = 0;
@@ -755,14 +840,16 @@ function TimelineHeader({ viewStart, days, dayWidth, todayX, workingSet, locale 
       <div className="relative" style={{ height: HEADER_HEIGHT / 2 }}>
         {Array.from({ length: days }, (_, i) => {
           const d = addDays(viewStart, i);
-          const weekend = !workingSet.has(isoDow(d));
+          const offDay = !isWorkingDay(d, calendar);
+          const isHoliday = calendar.nonWorking.has(toDateString(d));
           const isToday = i * dayWidth === todayX;
           return (
             <div
               key={i}
               className={cn(
                 'absolute top-0 bottom-0 flex items-center justify-center text-[10px] border-r border-neutral-100 dark:border-neutral-800',
-                weekend && 'text-neutral-400 dark:text-neutral-500 bg-neutral-100 dark:bg-neutral-800/60',
+                offDay && !isHoliday && 'text-neutral-400 dark:text-neutral-500 bg-neutral-100 dark:bg-neutral-800/60',
+                isHoliday && 'text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/40',
                 isToday && 'bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400 font-semibold',
               )}
               style={{ left: i * dayWidth, width: dayWidth }}

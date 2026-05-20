@@ -55,6 +55,16 @@ export interface WorkItem {
   deleted_at: string | null;
 }
 
+export interface NonWorkingDay {
+  id: string;
+  project_id: string;
+  start_date: string;
+  end_date: string;
+  reason: string | null;
+  created_by: string;
+  created_at: string;
+}
+
 export interface Dependency {
   id: string;
   project_id: string;

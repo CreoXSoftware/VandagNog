@@ -5,8 +5,9 @@ import { Input, Textarea } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { DisabledHint } from '@/components/ui/DisabledHint';
 import { toDateInput, formatDate } from '@/lib/utils';
-import type { Dependency, ProjectMember, WorkItem } from '@/types/db';
+import type { Dependency, NonWorkingDay, ProjectMember, WorkItem } from '@/types/db';
 import { useUpdateWorkItem, useRescheduleFrom } from '@/hooks/useWorkItems';
+import { buildCalendar, type WorkCalendar } from '@/components/gantt/ganttUtils';
 import { DependencyEditor } from './DependencyEditor';
 import { CommentThread } from './CommentThread';
 import { toast } from 'sonner';
@@ -24,6 +25,7 @@ interface Props {
   allItems: WorkItem[];
   dependencies: Dependency[];
   workingDays: number[];
+  nonWorkingDays: NonWorkingDay[];
   members: ProjectMember[];
   canEdit: boolean;
   autoFocusName?: boolean;
@@ -33,13 +35,13 @@ interface Props {
   onNavigate: (id: string) => void;
 }
 
-export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, members, canEdit, autoFocusName, initialTab, onNameFocused, onClose, onNavigate }: Props) {
+export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, nonWorkingDays, members, canEdit, autoFocusName, initialTab, onNameFocused, onClose, onNavigate }: Props) {
   const update = useUpdateWorkItem();
   const reschedule = useRescheduleFrom();
   const [tab, setTab] = useState<'details' | 'comments'>(initialTab ?? 'comments');
   const t = useT();
 
-  const workingSet = useMemo(() => new Set(workingDays), [workingDays]);
+  const calendar = useMemo(() => buildCalendar(workingDays, nonWorkingDays), [workingDays, nonWorkingDays]);
 
   const breadcrumb = useMemo(() => buildBreadcrumb(workItem, allItems), [workItem, allItems]);
   const children = useMemo(() => allItems.filter((i) => i.parent_id === workItem.id), [allItems, workItem.id]);
@@ -79,7 +81,7 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
       toast.error(t('cascade.needStartDate'));
       return;
     }
-    const newEnd = endDateFromStartAndDuration(workItem.start_date, workDays, workingSet);
+    const newEnd = endDateFromStartAndDuration(workItem.start_date, workDays, calendar);
     if (!newEnd) return;
     handleDateChange(workItem.start_date, newEnd);
   }
@@ -158,7 +160,7 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
               <DurationField
                 start={workItem.start_date}
                 end={workItem.end_date}
-                workingDays={workingSet}
+                calendar={calendar}
                 disabled={!canEditDates}
                 onCommit={handleDurationChange}
               />
@@ -275,18 +277,18 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
 function DurationField({
   start,
   end,
-  workingDays,
+  calendar,
   disabled,
   onCommit,
 }: {
   start: string | null;
   end: string | null;
-  workingDays: Set<number>;
+  calendar: WorkCalendar;
   disabled: boolean;
   onCommit: (workDays: number) => void;
 }) {
   const t = useT();
-  const display = workItemDurationLabel(start, end, workingDays);
+  const display = workItemDurationLabel(start, end, calendar);
   const [v, setV] = useState(display);
   useEffect(() => setV(display), [display]);
 
