@@ -12,6 +12,7 @@ import { GanttView } from '@/components/gantt/GanttView';
 import { CalendarView } from '@/components/calendar/CalendarView';
 import { MembersPanel } from '@/components/members/MembersPanel';
 import { EditProjectDialog } from '@/components/project/EditProjectDialog';
+import { ProjectSummary } from '@/components/project/ProjectSummary';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/Tooltip';
 import { cn } from '@/lib/utils';
 import type { ProjectRole } from '@/types/db';
@@ -85,6 +86,13 @@ export function ProjectPage() {
             <Pencil size={14} />
           </button>
         )}
+        <div className="flex-1" />
+        <ProjectSummary
+          workItems={workItems}
+          workingDays={project.working_days}
+          nonWorkingDays={nonWorkingDays}
+          members={members}
+        />
         <div className="absolute left-1/2 -translate-x-1/2 flex gap-1 bg-neutral-100 dark:bg-neutral-800 rounded p-0.5">
           {(['gantt', 'calendar', 'members'] as const).map((v) => (
             <button
