@@ -126,6 +126,7 @@ export function ProjectPage() {
           members={members}
           canEdit={canEdit}
           autoFocusName={createdId === selectedItem.id}
+          initialTab={search.tab}
           onNameFocused={() => setCreatedId(null)}
           onClose={() => selectItem(undefined)}
           onNavigate={(id) => selectItem(id)}

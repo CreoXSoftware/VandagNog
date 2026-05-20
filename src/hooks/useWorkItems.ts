@@ -96,6 +96,37 @@ export function useUpdateWorkItem() {
   });
 }
 
+export function useReorderWorkItems() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { project_id: string; updates: { id: string; position: number }[] }) => {
+      for (const u of input.updates) {
+        const { error } = await supabase
+          .from('work_items')
+          .update({ position: u.position })
+          .eq('id', u.id);
+        if (error) throw error;
+      }
+    },
+    onMutate: async (input) => {
+      await qc.cancelQueries({ queryKey: workItemsKey(input.project_id) });
+      const prev = qc.getQueryData<WorkItem[]>(workItemsKey(input.project_id));
+      if (prev) {
+        const posMap = new Map(input.updates.map((u) => [u.id, u.position]));
+        qc.setQueryData<WorkItem[]>(
+          workItemsKey(input.project_id),
+          prev.map((wi) => (posMap.has(wi.id) ? { ...wi, position: posMap.get(wi.id)! } as WorkItem : wi)),
+        );
+      }
+      return { prev };
+    },
+    onError: (_e, input, ctx) => {
+      if (ctx?.prev) qc.setQueryData(workItemsKey(input.project_id), ctx.prev);
+    },
+    onSettled: (_d, _e, input) => qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) }),
+  });
+}
+
 export function useDeleteWorkItem() {
   const qc = useQueryClient();
   return useMutation({

@@ -2,7 +2,7 @@ import { useMemo, useState, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronRight, ZoomIn, ZoomOut, Plus, Trash2, ListPlus, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Dependency, WorkItem, WorkItemLevel } from '@/types/db';
-import { useCreateWorkItem, useDeleteWorkItem, useRescheduleFrom } from '@/hooks/useWorkItems';
+import { useCreateWorkItem, useDeleteWorkItem, useReorderWorkItems, useRescheduleFrom } from '@/hooks/useWorkItems';
 import { cn } from '@/lib/utils';
 import {
   DAY_WIDTH,
@@ -71,6 +71,7 @@ const TREE_WIDTH_KEY = 'gantt.treeWidth';
 export function GanttView({ projectId, workItems, dependencies, workingDays, onSelect, onCreate, canEdit, selectedId }: Props) {
   const reschedule = useRescheduleFrom();
   const create = useCreateWorkItem();
+  const reorder = useReorderWorkItems();
   const t = useT();
   const { lang } = useI18n();
   const locale = lang === 'af' ? 'af-ZA' : 'en-US';
@@ -84,6 +85,8 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
   const flatRows = useMemo(() => flatten(workItems, expanded), [workItems, expanded]);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
+  const [dragEpicId, setDragEpicId] = useState<string | null>(null);
+  const [overEpic, setOverEpic] = useState<{ id: string; pos: 'before' | 'after' } | null>(null);
 
   const selectedItem = useMemo(
     () => (selectedId ? workItems.find((w) => w.id === selectedId) : undefined),
@@ -294,6 +297,54 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
     }
   }
 
+  function onEpicDragStart(e: React.DragEvent, id: string) {
+    setDragEpicId(id);
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', id); } catch { /* ignore */ }
+  }
+  function onEpicDragOver(e: React.DragEvent, id: string) {
+    if (!dragEpicId || dragEpicId === id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const pos: 'before' | 'after' = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+    if (!overEpic || overEpic.id !== id || overEpic.pos !== pos) {
+      setOverEpic({ id, pos });
+    }
+  }
+  function clearEpicDrag() {
+    setDragEpicId(null);
+    setOverEpic(null);
+  }
+  function onEpicDrop(e: React.DragEvent, targetId: string) {
+    e.preventDefault();
+    const draggedId = dragEpicId;
+    const over = overEpic;
+    clearEpicDrag();
+    if (!draggedId || draggedId === targetId || !over) return;
+    const epics = workItems
+      .filter((w) => w.level === 'epic')
+      .sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at));
+    const fromIdx = epics.findIndex((w) => w.id === draggedId);
+    let toIdx = epics.findIndex((w) => w.id === targetId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    if (over.pos === 'after') toIdx++;
+    if (toIdx > fromIdx) toIdx--;
+    if (toIdx === fromIdx) return;
+    const next = [...epics];
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
+    const updates = next
+      .map((w, i) => ({ id: w.id, position: (i + 1) * 1000, prevPos: w.position }))
+      .filter((u) => u.prevPos !== u.position)
+      .map(({ id, position }) => ({ id, position }));
+    if (updates.length === 0) return;
+    reorder.mutate(
+      { project_id: projectId, updates },
+      { onError: (err) => toast.error((err as Error).message) },
+    );
+  }
+
   function startDrag(e: React.PointerEvent, row: FlatRow, mode: DragMode) {
     if (!canEdit) return;
     if (row.hasChildren || row.item.level === 'epic') return; // rollup parents are read-only
@@ -436,15 +487,28 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
               const wd = s && en ? countWorkingDays(s, en, workingSet) : 0;
               const childLevel = nextLevel[r.item.level];
               const isSelected = selectedId === r.item.id;
+              const isEpic = r.item.level === 'epic';
+              const epicDraggable = canEdit && isEpic;
+              const isDraggingThis = dragEpicId === r.item.id;
+              const dropBefore = isEpic && overEpic?.id === r.item.id && overEpic.pos === 'before';
+              const dropAfter = isEpic && overEpic?.id === r.item.id && overEpic.pos === 'after';
               return (
                 <div
                   key={r.item.id}
                   onClick={() => onSelect(r.item.id)}
+                  draggable={epicDraggable}
+                  onDragStart={epicDraggable ? (e) => onEpicDragStart(e, r.item.id) : undefined}
+                  onDragOver={isEpic ? (e) => onEpicDragOver(e, r.item.id) : undefined}
+                  onDrop={isEpic ? (e) => onEpicDrop(e, r.item.id) : undefined}
+                  onDragEnd={epicDraggable ? clearEpicDrag : undefined}
                   className={cn(
                     'group flex items-center gap-1 px-2 cursor-pointer border-b border-neutral-100 dark:border-neutral-800',
                     isSelected
                       ? 'bg-blue-50 dark:bg-blue-950/40'
                       : 'hover:bg-neutral-50 dark:hover:bg-neutral-800',
+                    isDraggingThis && 'opacity-40',
+                    dropBefore && 'shadow-[inset_0_2px_0_0_#3b82f6]',
+                    dropAfter && 'shadow-[inset_0_-2px_0_0_#3b82f6]',
                   )}
                   style={{ height: ROW_HEIGHT, paddingLeft: 8 + r.depth * 14 }}
                 >
@@ -724,7 +788,20 @@ function flatten(items: WorkItem[], expanded: Set<string>): FlatRow[] {
     byParent.get(k)!.push(it);
   }
   for (const arr of byParent.values()) {
-    arr.sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at));
+    if (arr.length === 0) continue;
+    if (arr[0].level === 'epic') {
+      arr.sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at));
+    } else {
+      arr.sort((a, b) => {
+        const ad = a.start_date;
+        const bd = b.start_date;
+        if (ad && bd) {
+          if (ad !== bd) return ad < bd ? -1 : 1;
+        } else if (ad) return -1;
+        else if (bd) return 1;
+        return a.created_at.localeCompare(b.created_at);
+      });
+    }
   }
   const out: FlatRow[] = [];
   function walk(parent: string | null, depth: number) {

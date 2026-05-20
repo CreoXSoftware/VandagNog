@@ -11,11 +11,28 @@ export function useNotifications() {
     queryFn: async (): Promise<AppNotification[]> => {
       const { data, error } = await supabase
         .from('notifications')
-        .select('*')
+        .select('*, project:projects(name)')
         .order('created_at', { ascending: false })
         .limit(30);
       if (error) throw error;
-      return data ?? [];
+      const rows = (data ?? []) as AppNotification[];
+
+      const actorIds = Array.from(
+        new Set(rows.map((r) => r.actor_id).filter((v): v is string => !!v)),
+      );
+      if (actorIds.length === 0) return rows;
+
+      const { data: actors } = await supabase
+        .from('user_settings')
+        .select('user_id, first_name, last_name')
+        .in('user_id', actorIds);
+      const byId = new Map<string, { first_name: string | null; last_name: string | null }>();
+      for (const a of actors ?? []) byId.set(a.user_id, { first_name: a.first_name, last_name: a.last_name });
+
+      return rows.map((r) => ({
+        ...r,
+        actor: r.actor_id ? byId.get(r.actor_id) ?? null : null,
+      }));
     },
   });
 }

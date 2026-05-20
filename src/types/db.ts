@@ -85,15 +85,26 @@ export type NotificationEvent =
   | 'predecessor_moved'
   | 'assigned_item_deleted';
 
+export interface NotificationPayload {
+  name?: string;
+  level?: 'epic' | 'task' | 'subtask';
+  comment_id?: string;
+  predecessor_id?: string;
+  predecessor_name?: string;
+}
+
 export interface AppNotification {
   id: string;
   user_id: string;
   project_id: string | null;
+  actor_id: string | null;
   event_type: NotificationEvent;
   entity_id: string | null;
-  payload: Record<string, unknown>;
+  payload: NotificationPayload;
   read_at: string | null;
   created_at: string;
+  project?: { name: string } | null;
+  actor?: { first_name: string | null; last_name: string | null } | null;
 }
 
 export interface AuditLogEntry {

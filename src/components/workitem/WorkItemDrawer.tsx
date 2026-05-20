@@ -27,15 +27,16 @@ interface Props {
   members: ProjectMember[];
   canEdit: boolean;
   autoFocusName?: boolean;
+  initialTab?: 'details' | 'comments';
   onNameFocused?: () => void;
   onClose: () => void;
   onNavigate: (id: string) => void;
 }
 
-export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, members, canEdit, autoFocusName, onNameFocused, onClose, onNavigate }: Props) {
+export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, members, canEdit, autoFocusName, initialTab, onNameFocused, onClose, onNavigate }: Props) {
   const update = useUpdateWorkItem();
   const reschedule = useRescheduleFrom();
-  const [tab, setTab] = useState<'details' | 'comments'>('comments');
+  const [tab, setTab] = useState<'details' | 'comments'>(initialTab ?? 'comments');
   const t = useT();
 
   const workingSet = useMemo(() => new Set(workingDays), [workingDays]);
