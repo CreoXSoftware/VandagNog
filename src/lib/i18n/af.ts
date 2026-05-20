@@ -68,7 +68,6 @@ export const af: Dict = {
   project: {
     loading: 'Laai projek…',
     view: {
-      tree: 'boom',
       gantt: 'gantt',
       members: 'lede',
     },

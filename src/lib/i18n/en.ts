@@ -66,7 +66,6 @@ export const en = {
   project: {
     loading: 'Loading project…',
     view: {
-      tree: 'tree',
       gantt: 'gantt',
       members: 'members',
     },

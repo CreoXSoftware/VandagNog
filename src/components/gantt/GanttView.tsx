@@ -1,8 +1,8 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
-import { ChevronDown, ChevronRight, ZoomIn, ZoomOut } from 'lucide-react';
-import type { Dependency, WorkItem } from '@/types/db';
-import { useRescheduleFrom } from '@/hooks/useWorkItems';
+import { ChevronDown, ChevronRight, ZoomIn, ZoomOut, Plus, Trash2, ListPlus, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { toast } from 'sonner';
+import type { Dependency, WorkItem, WorkItemLevel } from '@/types/db';
+import { useCreateWorkItem, useDeleteWorkItem, useRescheduleFrom } from '@/hooks/useWorkItems';
 import { cn } from '@/lib/utils';
 import {
   DAY_WIDTH,
@@ -21,7 +21,8 @@ import {
 } from './ganttUtils';
 import { Badge } from '@/components/ui/Badge';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/Tooltip';
-import { useI18n, useT } from '@/lib/i18n';
+import { QuickAddPanel } from '@/components/workitem/QuickAddPanel';
+import { useI18n, useT, type TKey } from '@/lib/i18n';
 
 interface Props {
   projectId: string;
@@ -29,7 +30,9 @@ interface Props {
   dependencies: Dependency[];
   workingDays: number[];
   onSelect: (id: string) => void;
+  onCreate: (id: string) => void;
   canEdit: boolean;
+  selectedId?: string;
 }
 
 interface FlatRow {
@@ -49,8 +52,25 @@ interface DragState {
   previewEnd: Date;
 }
 
-export function GanttView({ projectId, workItems, dependencies, workingDays, onSelect, canEdit }: Props) {
+const nextLevel: Record<WorkItemLevel, WorkItemLevel | null> = {
+  epic: 'task',
+  task: 'subtask',
+  subtask: null,
+};
+
+const newLabelKey: Record<WorkItemLevel, TKey> = {
+  epic: 'workItem.newEpic',
+  task: 'workItem.newTask',
+  subtask: 'workItem.newSubtask',
+};
+
+const TREE_WIDTH_MIN = 220;
+const TREE_WIDTH_MAX = 720;
+const TREE_WIDTH_KEY = 'gantt.treeWidth';
+
+export function GanttView({ projectId, workItems, dependencies, workingDays, onSelect, onCreate, canEdit, selectedId }: Props) {
   const reschedule = useRescheduleFrom();
+  const create = useCreateWorkItem();
   const t = useT();
   const { lang } = useI18n();
   const locale = lang === 'af' ? 'af-ZA' : 'en-US';
@@ -63,6 +83,41 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
 
   const flatRows = useMemo(() => flatten(workItems, expanded), [workItems, expanded]);
   const [drag, setDrag] = useState<DragState | null>(null);
+  const [quickOpen, setQuickOpen] = useState(false);
+
+  const selectedItem = useMemo(
+    () => (selectedId ? workItems.find((w) => w.id === selectedId) : undefined),
+    [selectedId, workItems],
+  );
+
+  // Resizable tree column
+  const [treeWidth, setTreeWidth] = useState<number>(() => {
+    const stored = typeof window !== 'undefined' ? window.localStorage.getItem(TREE_WIDTH_KEY) : null;
+    const n = stored ? Number(stored) : NaN;
+    return Number.isFinite(n) && n >= TREE_WIDTH_MIN && n <= TREE_WIDTH_MAX ? n : TREE_WIDTH;
+  });
+  useEffect(() => {
+    try { window.localStorage.setItem(TREE_WIDTH_KEY, String(treeWidth)); } catch { /* ignore */ }
+  }, [treeWidth]);
+  const [resizing, setResizing] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!resizing) return;
+    function onMove(e: PointerEvent) {
+      const el = containerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const w = Math.max(TREE_WIDTH_MIN, Math.min(TREE_WIDTH_MAX, e.clientX - rect.left));
+      setTreeWidth(w);
+    }
+    function onUp() { setResizing(false); }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+  }, [resizing]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const today = startOfDay(new Date());
@@ -133,7 +188,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
 
-  // Drag handlers
+  // Drag handlers (bar move/resize)
   useEffect(() => {
     if (!drag) return;
     function onMove(e: PointerEvent) {
@@ -194,6 +249,51 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
     setExpanded(new Set());
   }
 
+  async function addEpic() {
+    try {
+      const res = await create.mutateAsync({
+        project_id: projectId,
+        parent_id: null,
+        level: 'epic',
+        name: t(newLabelKey.epic),
+      });
+      onCreate(res.id);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
+  async function addChild(parent: WorkItem) {
+    const childLevel = nextLevel[parent.level];
+    if (!childLevel) return;
+    try {
+      const r = await create.mutateAsync({
+        project_id: projectId,
+        parent_id: parent.id,
+        level: childLevel,
+        name: t(newLabelKey[childLevel]),
+      });
+      setExpanded((prev) => {
+        const n = new Set(prev);
+        n.add(parent.id);
+        return n;
+      });
+      onCreate(r.id);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
+  const del = useDeleteWorkItem();
+  async function remove(item: WorkItem) {
+    if (!confirm(t('workItem.deleteConfirm', { level: t(`workItem.level.${item.level}`), name: item.name }))) return;
+    try {
+      await del.mutateAsync({ id: item.id, project_id: projectId });
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
   function startDrag(e: React.PointerEvent, row: FlatRow, mode: DragMode) {
     if (!canEdit) return;
     if (row.hasChildren || row.item.level === 'epic') return; // rollup parents are read-only
@@ -216,7 +316,6 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
   const totalWidth = effectiveDays * dayWidth;
   const totalHeight = HEADER_HEIGHT + flatRows.length * ROW_HEIGHT;
 
-  // Position helpers
   function rowIndexById(id: string): number {
     return flatRows.findIndex((r) => r.item.id === id);
   }
@@ -235,8 +334,6 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
   return (
     <div className="h-full flex flex-col bg-white dark:bg-neutral-900">
       <div className="h-10 px-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-2 text-xs shrink-0">
-        <button onClick={expandAll} className="px-2 h-7 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800">{t('gantt.expandAll')}</button>
-        <button onClick={collapseAll} className="px-2 h-7 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800">{t('gantt.collapseAll')}</button>
         <div className="flex-1" />
         <div className="flex items-center gap-1 mr-2">
           <button
@@ -267,25 +364,88 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
         </div>
         <div className="text-neutral-500 dark:text-neutral-400">{t('gantt.visibleTotal', { visible: flatRows.length, total: workItems.length })}</div>
       </div>
-      <div className="flex-1 overflow-hidden flex">
-        {/* Tree column (left, fixed) */}
-        <div className="border-r border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shrink-0" style={{ width: TREE_WIDTH }}>
+      <div ref={containerRef} className={cn('flex-1 overflow-hidden flex', resizing && 'select-none cursor-col-resize')}>
+        {/* Tree column (left, fixed width, resizable) */}
+        <div className="border-r border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shrink-0 flex flex-col" style={{ width: treeWidth }}>
           <div
-            className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-[11px] font-medium text-neutral-600 dark:text-neutral-300 flex items-center px-3"
+            className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 text-[11px] font-medium text-neutral-600 dark:text-neutral-300 flex items-center gap-1 px-3 shrink-0"
             style={{ height: HEADER_HEIGHT }}
           >
-            {t('gantt.workItem')}
+            <span>{t('gantt.workItem')}</span>
+            <button
+              onClick={expandAll}
+              className="p-1 rounded hover:bg-neutral-200 dark:hover:bg-neutral-800 text-neutral-500 dark:text-neutral-400"
+              title={t('gantt.expandAll')}
+              aria-label={t('gantt.expandAll')}
+            >
+              <ChevronsUpDown size={14} />
+            </button>
+            <button
+              onClick={collapseAll}
+              className="p-1 rounded hover:bg-neutral-200 dark:hover:bg-neutral-800 text-neutral-500 dark:text-neutral-400"
+              title={t('gantt.collapseAll')}
+              aria-label={t('gantt.collapseAll')}
+            >
+              <ChevronsDownUp size={14} />
+            </button>
+            <div className="flex-1" />
+            {canEdit && (
+              <>
+                <button
+                  onClick={() => setQuickOpen((v) => !v)}
+                  className={cn(
+                    'p-1 rounded text-neutral-500 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-800',
+                    quickOpen && 'bg-neutral-200 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200',
+                  )}
+                  title={t('workItem.quickAdd')}
+                  aria-label={t('workItem.quickAdd')}
+                >
+                  <ListPlus size={14} />
+                </button>
+                <button
+                  onClick={addEpic}
+                  disabled={create.isPending}
+                  className="p-1 rounded text-neutral-500 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-800 disabled:opacity-40"
+                  title={t('workItem.addEpic')}
+                  aria-label={t('workItem.addEpic')}
+                >
+                  <Plus size={14} />
+                </button>
+              </>
+            )}
           </div>
-          <div className="overflow-y-auto" style={{ height: `calc(100% - ${HEADER_HEIGHT}px)` }}>
+          {canEdit && quickOpen && (
+            <div className="p-2 border-b border-neutral-200 dark:border-neutral-800 shrink-0">
+              <QuickAddPanel
+                projectId={projectId}
+                selected={selectedItem}
+                onClose={() => setQuickOpen(false)}
+                onLastCreated={(id) => onCreate(id)}
+              />
+            </div>
+          )}
+          <div className="flex-1 overflow-y-auto">
+            {flatRows.length === 0 && (
+              <div className="m-3 text-xs text-neutral-500 dark:text-neutral-400 py-8 text-center border border-dashed border-neutral-300 dark:border-neutral-700 rounded">
+                {t('workItem.noItems')} {canEdit && t('workItem.addEpicToStart')}
+              </div>
+            )}
             {flatRows.map((r) => {
               const s = parseDate(r.item.start_date);
               const en = parseDate(r.item.end_date);
               const wd = s && en ? countWorkingDays(s, en, workingSet) : 0;
+              const childLevel = nextLevel[r.item.level];
+              const isSelected = selectedId === r.item.id;
               return (
                 <div
                   key={r.item.id}
                   onClick={() => onSelect(r.item.id)}
-                  className="flex items-center gap-1 px-2 cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800 border-b border-neutral-100 dark:border-neutral-800"
+                  className={cn(
+                    'group flex items-center gap-1 px-2 cursor-pointer border-b border-neutral-100 dark:border-neutral-800',
+                    isSelected
+                      ? 'bg-blue-50 dark:bg-blue-950/40'
+                      : 'hover:bg-neutral-50 dark:hover:bg-neutral-800',
+                  )}
                   style={{ height: ROW_HEIGHT, paddingLeft: 8 + r.depth * 14 }}
                 >
                   <button
@@ -299,12 +459,44 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, onS
                   </button>
                   <Badge kind={r.item.level}>{r.item.level[0].toUpperCase()}</Badge>
                   <span className="text-xs truncate flex-1">{r.item.name}</span>
-                  <span className="text-[10px] text-neutral-400 dark:text-neutral-500 w-7 text-right">{formatWorkDuration(wd)}</span>
-                  <span className="text-[10px] text-neutral-400 dark:text-neutral-500 w-7 text-right">{r.item.progress}%</span>
+                  <span className="text-[10px] text-neutral-400 dark:text-neutral-500 w-7 text-right tabular-nums group-hover:hidden">{formatWorkDuration(wd)}</span>
+                  <span className="text-[10px] text-neutral-400 dark:text-neutral-500 w-7 text-right tabular-nums group-hover:hidden">{r.item.progress}%</span>
+                  {canEdit && (
+                    <div className="hidden group-hover:flex items-center gap-0.5">
+                      {childLevel && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); addChild(r.item); }}
+                          className="p-1 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded text-neutral-500 dark:text-neutral-400"
+                          title={t('workItem.addLevel', { level: t(`workItem.level.${childLevel}`) })}
+                        >
+                          <Plus size={12} />
+                        </button>
+                      )}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); remove(r.item); }}
+                        className="p-1 hover:bg-red-100 dark:hover:bg-red-950 rounded text-neutral-500 dark:text-neutral-400 hover:text-red-600 dark:hover:text-red-400"
+                        title={t('common.delete')}
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
+        </div>
+
+        {/* Resize handle */}
+        <div
+          onPointerDown={(e) => { e.preventDefault(); setResizing(true); }}
+          className={cn(
+            'w-1 shrink-0 cursor-col-resize relative group',
+            resizing ? 'bg-blue-400' : 'hover:bg-blue-400/60',
+          )}
+          title="Drag to resize"
+        >
+          <div className="absolute inset-y-0 -left-1 -right-1" />
         </div>
 
         {/* Timeline column (right, scrollable) */}

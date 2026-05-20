@@ -6,7 +6,6 @@ import { useProjectRealtime } from '@/hooks/useProjectRealtime';
 import { useWorkItems } from '@/hooks/useWorkItems';
 import { useDependencies } from '@/hooks/useDependencies';
 import { useMembers, useMyRole } from '@/hooks/useMembers';
-import { WorkItemTree } from '@/components/workitem/WorkItemTree';
 import { WorkItemDrawer } from '@/components/workitem/WorkItemDrawer';
 import { GanttView } from '@/components/gantt/GanttView';
 import { MembersPanel } from '@/components/members/MembersPanel';
@@ -32,10 +31,10 @@ export function ProjectPage() {
   const { data: members = [] } = useMembers(projectId);
   const { data: role } = useMyRole(projectId);
 
-  const view = search.view ?? 'tree';
+  const view = search.view ?? 'gantt';
   const selectedItem = search.item ? workItems.find((w) => w.id === search.item) : undefined;
 
-  function setView(v: 'tree' | 'gantt' | 'members') {
+  function setView(v: 'gantt' | 'members') {
     nav({ to: '/projects/$projectId', params: { projectId }, search: { ...search, view: v } });
   }
 
@@ -84,7 +83,7 @@ export function ProjectPage() {
           </button>
         )}
         <div className="absolute left-1/2 -translate-x-1/2 flex gap-1 bg-neutral-100 dark:bg-neutral-800 rounded p-0.5">
-          {(['tree', 'gantt', 'members'] as const).map((v) => (
+          {(['gantt', 'members'] as const).map((v) => (
             <button
               key={v}
               onClick={() => setView(v)}
@@ -101,16 +100,6 @@ export function ProjectPage() {
         </div>
       </div>
       <div className="flex-1 overflow-hidden">
-        {view === 'tree' && (
-          <WorkItemTree
-            projectId={projectId}
-            workItems={workItems}
-            onSelect={selectItem}
-            onCreate={createdItem}
-            canEdit={canEdit}
-            selectedId={search.item}
-          />
-        )}
         {view === 'gantt' && (
           <GanttView
             projectId={projectId}
@@ -118,7 +107,9 @@ export function ProjectPage() {
             dependencies={dependencies}
             workingDays={project.working_days}
             onSelect={selectItem}
+            onCreate={createdItem}
             canEdit={canEdit}
+            selectedId={search.item}
           />
         )}
         {view === 'members' && (
