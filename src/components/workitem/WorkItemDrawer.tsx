@@ -19,6 +19,7 @@ import {
   workItemDurationLabel,
   endDateFromStartAndDuration,
 } from '@/lib/duration';
+import { levelLabel, outlineNumbers } from '@/lib/levels';
 
 interface Props {
   workItem: WorkItem;
@@ -45,7 +46,8 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
 
   const breadcrumb = useMemo(() => buildBreadcrumb(workItem, allItems), [workItem, allItems]);
   const children = useMemo(() => allItems.filter((i) => i.parent_id === workItem.id), [allItems, workItem.id]);
-  const isLeaf = children.length === 0 && workItem.level !== 'epic';
+  const numbers = useMemo(() => outlineNumbers(allItems), [allItems]);
+  const isLeaf = children.length === 0;
   const canEditDates = canEdit && isLeaf;
   const permReason = !canEdit ? t('workItem.permReason') : null;
   const dateReason = !canEdit
@@ -97,13 +99,17 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
               {i > 0 && <span className="text-neutral-400 dark:text-neutral-500">›</span>}
               {i < breadcrumb.length - 1 ? (
                 <button
-                  className="text-blue-600 dark:text-blue-400 hover:underline truncate max-w-[100px]"
+                  className="text-blue-600 dark:text-blue-400 hover:underline truncate max-w-[140px]"
                   onClick={() => onNavigate(b.id)}
                 >
+                  <span className="text-neutral-400 dark:text-neutral-500 tabular-nums mr-1">{numbers.get(b.id) ?? ''}</span>
                   {b.name}
                 </button>
               ) : (
-                <span className="truncate max-w-[140px]">{b.name}</span>
+                <span className="truncate max-w-[180px]">
+                  <span className="text-neutral-400 dark:text-neutral-500 tabular-nums mr-1">{numbers.get(b.id) ?? ''}</span>
+                  {b.name}
+                </span>
               )}
             </span>
           ))}
@@ -112,8 +118,9 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
     >
       <div className="p-4 space-y-4">
         <div className="flex items-center gap-2">
-          <Badge kind={workItem.level}>{t(`workItem.level.${workItem.level}`)}</Badge>
-          {!isLeaf && workItem.level !== 'epic' && (
+          <Badge kind={workItem.level}>{levelLabel(workItem.level)}</Badge>
+          <span className="text-[10px] tabular-nums text-neutral-500 dark:text-neutral-400">#{numbers.get(workItem.id) ?? ''}</span>
+          {!isLeaf && (
             <span className="text-[10px] text-neutral-500 dark:text-neutral-400">{t('workItem.rollupParent')}</span>
           )}
         </div>
@@ -229,7 +236,8 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
                   onClick={() => onNavigate(c.id)}
                   className="w-full text-left px-2 py-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center gap-2 text-sm"
                 >
-                  <Badge kind={c.level}>{t(`workItem.level.${c.level}`)}</Badge>
+                  <Badge kind={c.level}>{levelLabel(c.level)}</Badge>
+                  <span className="text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">{numbers.get(c.id) ?? ''}</span>
                   <span className="flex-1 truncate">{c.name}</span>
                   <span className="text-[11px] text-neutral-400 dark:text-neutral-500">{c.progress}%</span>
                 </button>

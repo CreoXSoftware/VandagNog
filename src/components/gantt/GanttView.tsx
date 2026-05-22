@@ -1,8 +1,8 @@
-import { useMemo, useState, useRef, useEffect } from 'react';
+import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { ChevronDown, ChevronRight, ZoomIn, ZoomOut, Plus, Trash2, ListPlus, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Dependency, NonWorkingDay, WorkItem, WorkItemLevel } from '@/types/db';
-import { useCreateWorkItem, useDeleteWorkItem, useReorderWorkItems, useRescheduleFrom } from '@/hooks/useWorkItems';
+import type { Dependency, NonWorkingDay, WorkItem } from '@/types/db';
+import { useCreateWorkItem, useDeleteWorkItem, useReorderWorkItems, useRescheduleFrom, type ReorderUpdate } from '@/hooks/useWorkItems';
 import { cn } from '@/lib/utils';
 import {
   DAY_WIDTH,
@@ -23,7 +23,8 @@ import {
 import { Badge } from '@/components/ui/Badge';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/Tooltip';
 import { QuickAddPanel } from '@/components/workitem/QuickAddPanel';
-import { useI18n, useT, type TKey } from '@/lib/i18n';
+import { useI18n, useT } from '@/lib/i18n';
+import { levelStyle, levelLabel, outlineNumbers, siblingCompare } from '@/lib/levels';
 
 interface Props {
   projectId: string;
@@ -54,18 +55,6 @@ interface DragState {
   previewEnd: Date;
 }
 
-const nextLevel: Record<WorkItemLevel, WorkItemLevel | null> = {
-  epic: 'task',
-  task: 'subtask',
-  subtask: null,
-};
-
-const newLabelKey: Record<WorkItemLevel, TKey> = {
-  epic: 'workItem.newEpic',
-  task: 'workItem.newTask',
-  subtask: 'workItem.newSubtask',
-};
-
 const TREE_WIDTH_MIN = 220;
 const TREE_WIDTH_MAX = 720;
 const TREE_WIDTH_KEY = 'gantt.treeWidth';
@@ -81,15 +70,16 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   const range = useMemo(() => computeRange(workItems), [workItems]);
 
   const [expanded, setExpanded] = useState<Set<string>>(() => {
-    return new Set(workItems.filter((w) => w.level !== 'subtask').map((w) => w.id));
+    return new Set(workItems.filter((w) => w.level < 2).map((w) => w.id));
   });
 
   const flatRows = useMemo(() => flatten(workItems, expanded), [workItems, expanded]);
+  const numbers = useMemo(() => outlineNumbers(workItems), [workItems]);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [createDrag, setCreateDrag] = useState<{ id: string; anchor: Date; previewStart: Date; previewEnd: Date } | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
-  const [dragEpicId, setDragEpicId] = useState<string | null>(null);
-  const [overEpic, setOverEpic] = useState<{ id: string; pos: 'before' | 'after' } | null>(null);
+  const [dragRowId, setDragRowId] = useState<string | null>(null);
+  const [overRow, setOverRow] = useState<{ id: string; pos: 'before' | 'after' | 'on' } | null>(null);
 
   const selectedItem = useMemo(
     () => (selectedId ? workItems.find((w) => w.id === selectedId) : undefined),
@@ -284,7 +274,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
 
   function startCreateDrag(e: React.PointerEvent, row: FlatRow) {
     if (!canEdit) return;
-    if (row.hasChildren || row.item.level === 'epic') return;
+    if (row.hasChildren) return;
     if (row.item.start_date && row.item.end_date) return;
     const d = clientXToDate(e.clientX);
     if (!d) return;
@@ -308,13 +298,12 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     setExpanded(new Set());
   }
 
-  async function addEpic() {
+  async function addRoot() {
     try {
       const res = await create.mutateAsync({
         project_id: projectId,
         parent_id: null,
-        level: 'epic',
-        name: t(newLabelKey.epic),
+        name: t('workItem.newItem'),
       });
       onCreate(res.id);
     } catch (e) {
@@ -323,14 +312,11 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   }
 
   async function addChild(parent: WorkItem) {
-    const childLevel = nextLevel[parent.level];
-    if (!childLevel) return;
     try {
       const r = await create.mutateAsync({
         project_id: projectId,
         parent_id: parent.id,
-        level: childLevel,
-        name: t(newLabelKey[childLevel]),
+        name: t('workItem.newItem'),
       });
       setExpanded((prev) => {
         const n = new Set(prev);
@@ -345,7 +331,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
 
   const del = useDeleteWorkItem();
   async function remove(item: WorkItem) {
-    if (!confirm(t('workItem.deleteConfirm', { level: t(`workItem.level.${item.level}`), name: item.name }))) return;
+    if (!confirm(t('workItem.deleteConfirm', { name: item.name }))) return;
     try {
       await del.mutateAsync({ id: item.id, project_id: projectId });
     } catch (e) {
@@ -353,57 +339,162 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     }
   }
 
-  function onEpicDragStart(e: React.DragEvent, id: string) {
-    setDragEpicId(id);
+  // Map: id -> all descendants (excluded as drop targets to prevent cycles).
+  const descendants = useMemo(() => {
+    const byParent = new Map<string | null, WorkItem[]>();
+    for (const w of workItems) {
+      const k = w.parent_id ?? null;
+      if (!byParent.has(k)) byParent.set(k, []);
+      byParent.get(k)!.push(w);
+    }
+    function collect(id: string, out: Set<string>) {
+      const list = byParent.get(id) ?? [];
+      for (const c of list) {
+        out.add(c.id);
+        collect(c.id, out);
+      }
+    }
+    const result = new Map<string, Set<string>>();
+    for (const w of workItems) {
+      const s = new Set<string>();
+      collect(w.id, s);
+      result.set(w.id, s);
+    }
+    return result;
+  }, [workItems]);
+
+  function isInvalidDropTarget(draggedId: string, targetId: string): boolean {
+    if (draggedId === targetId) return true;
+    const descs = descendants.get(draggedId);
+    return descs ? descs.has(targetId) : false;
+  }
+
+  function onRowDragStart(e: React.DragEvent, id: string) {
+    if (!canEdit) return;
+    setDragRowId(id);
     e.dataTransfer.effectAllowed = 'move';
     try { e.dataTransfer.setData('text/plain', id); } catch { /* ignore */ }
   }
-  function onEpicDragOver(e: React.DragEvent, id: string) {
-    if (!dragEpicId || dragEpicId === id) return;
+  function onRowDragOver(e: React.DragEvent, id: string) {
+    if (!dragRowId) return;
+    if (isInvalidDropTarget(dragRowId, id)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const pos: 'before' | 'after' = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
-    if (!overEpic || overEpic.id !== id || overEpic.pos !== pos) {
-      setOverEpic({ id, pos });
+    const y = e.clientY - rect.top;
+    const h = rect.height;
+    let pos: 'before' | 'after' | 'on';
+    if (y < h * 0.25) pos = 'before';
+    else if (y > h * 0.75) pos = 'after';
+    else pos = 'on';
+    if (!overRow || overRow.id !== id || overRow.pos !== pos) {
+      setOverRow({ id, pos });
     }
   }
-  function clearEpicDrag() {
-    setDragEpicId(null);
-    setOverEpic(null);
+  function clearRowDrag() {
+    setDragRowId(null);
+    setOverRow(null);
   }
-  function onEpicDrop(e: React.DragEvent, targetId: string) {
+  function onRowDrop(e: React.DragEvent, targetId: string) {
     e.preventDefault();
-    const draggedId = dragEpicId;
-    const over = overEpic;
-    clearEpicDrag();
-    if (!draggedId || draggedId === targetId || !over) return;
-    const epics = workItems
-      .filter((w) => w.level === 'epic')
-      .sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at));
-    const fromIdx = epics.findIndex((w) => w.id === draggedId);
-    let toIdx = epics.findIndex((w) => w.id === targetId);
-    if (fromIdx < 0 || toIdx < 0) return;
-    if (over.pos === 'after') toIdx++;
-    if (toIdx > fromIdx) toIdx--;
-    if (toIdx === fromIdx) return;
-    const next = [...epics];
-    const [moved] = next.splice(fromIdx, 1);
-    next.splice(toIdx, 0, moved);
-    const updates = next
-      .map((w, i) => ({ id: w.id, position: (i + 1) * 1000, prevPos: w.position }))
-      .filter((u) => u.prevPos !== u.position)
-      .map(({ id, position }) => ({ id, position }));
+    const draggedId = dragRowId;
+    const over = overRow;
+    clearRowDrag();
+    if (!draggedId || !over) return;
+    if (isInvalidDropTarget(draggedId, targetId)) return;
+
+    const target = workItems.find((w) => w.id === targetId);
+    if (!target) return;
+    const newParentId = over.pos === 'on' ? targetId : (target.parent_id ?? null);
+
+    const updates = computeReparentUpdates({
+      items: workItems,
+      draggedId,
+      newParentId,
+      targetId: over.pos === 'on' ? null : targetId,
+      placeAfter: over.pos === 'after',
+    });
     if (updates.length === 0) return;
+    if (over.pos === 'on') {
+      setExpanded((prev) => {
+        const n = new Set(prev);
+        n.add(targetId);
+        return n;
+      });
+    }
     reorder.mutate(
       { project_id: projectId, updates },
       { onError: (err) => toast.error((err as Error).message) },
     );
   }
 
+  const indentItem = useCallback((id: string) => {
+    if (!canEdit) return;
+    const item = workItems.find((w) => w.id === id);
+    if (!item) return;
+    const siblings = workItems
+      .filter((w) => w.parent_id === item.parent_id && !w.deleted_at)
+      .sort(siblingCompare);
+    const idx = siblings.findIndex((w) => w.id === id);
+    if (idx <= 0) return;
+    const newParent = siblings[idx - 1];
+    const updates = computeReparentUpdates({
+      items: workItems,
+      draggedId: id,
+      newParentId: newParent.id,
+      targetId: null,
+      placeAfter: true,
+    });
+    if (updates.length === 0) return;
+    setExpanded((prev) => {
+      const n = new Set(prev);
+      n.add(newParent.id);
+      return n;
+    });
+    reorder.mutate(
+      { project_id: projectId, updates },
+      { onError: (err) => toast.error((err as Error).message) },
+    );
+  }, [canEdit, workItems, projectId, reorder]);
+
+  const outdentItem = useCallback((id: string) => {
+    if (!canEdit) return;
+    const item = workItems.find((w) => w.id === id);
+    if (!item || item.parent_id == null) return;
+    const parent = workItems.find((w) => w.id === item.parent_id);
+    if (!parent) return;
+    const updates = computeReparentUpdates({
+      items: workItems,
+      draggedId: id,
+      newParentId: parent.parent_id ?? null,
+      targetId: parent.id,
+      placeAfter: true,
+    });
+    if (updates.length === 0) return;
+    reorder.mutate(
+      { project_id: projectId, updates },
+      { onError: (err) => toast.error((err as Error).message) },
+    );
+  }, [canEdit, workItems, projectId, reorder]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Tab') return;
+      const tgt = e.target as HTMLElement | null;
+      const tag = tgt?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (tgt && tgt.isContentEditable)) return;
+      e.preventDefault();
+      if (e.shiftKey) outdentItem(selectedId!);
+      else indentItem(selectedId!);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedId, indentItem, outdentItem]);
+
   function startDrag(e: React.PointerEvent, row: FlatRow, mode: DragMode) {
     if (!canEdit) return;
-    if (row.hasChildren || row.item.level === 'epic') return; // rollup parents are read-only
+    if (row.hasChildren) return; // rollup parents are read-only
     const s = parseDate(row.item.start_date);
     const en = parseDate(row.item.end_date);
     if (!s || !en) return;
@@ -510,11 +601,11 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                   <ListPlus size={14} />
                 </button>
                 <button
-                  onClick={addEpic}
+                  onClick={addRoot}
                   disabled={create.isPending}
                   className="p-1 rounded text-neutral-500 dark:text-neutral-400 hover:bg-neutral-200 dark:hover:bg-neutral-800 disabled:opacity-40"
-                  title={t('workItem.addEpic')}
-                  aria-label={t('workItem.addEpic')}
+                  title={t('workItem.addRoot')}
+                  aria-label={t('workItem.addRoot')}
                 >
                   <Plus size={14} />
                 </button>
@@ -534,29 +625,30 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
           <div className="flex-1 overflow-y-auto">
             {flatRows.length === 0 && (
               <div className="m-3 text-xs text-neutral-500 dark:text-neutral-400 py-8 text-center border border-dashed border-neutral-300 dark:border-neutral-700 rounded">
-                {t('workItem.noItems')} {canEdit && t('workItem.addEpicToStart')}
+                {t('workItem.noItems')} {canEdit && t('workItem.addRootToStart')}
               </div>
             )}
             {flatRows.map((r) => {
               const s = parseDate(r.item.start_date);
               const en = parseDate(r.item.end_date);
               const wd = s && en ? countWorkingDays(s, en, calendar) : 0;
-              const childLevel = nextLevel[r.item.level];
               const isSelected = selectedId === r.item.id;
-              const isEpic = r.item.level === 'epic';
-              const epicDraggable = canEdit && isEpic;
-              const isDraggingThis = dragEpicId === r.item.id;
-              const dropBefore = isEpic && overEpic?.id === r.item.id && overEpic.pos === 'before';
-              const dropAfter = isEpic && overEpic?.id === r.item.id && overEpic.pos === 'after';
+              const rowDraggable = canEdit;
+              const isDraggingThis = dragRowId === r.item.id;
+              const isDropTarget = overRow?.id === r.item.id;
+              const dropBefore = isDropTarget && overRow!.pos === 'before';
+              const dropAfter = isDropTarget && overRow!.pos === 'after';
+              const dropOn = isDropTarget && overRow!.pos === 'on';
+              const num = numbers.get(r.item.id) ?? '';
               return (
                 <div
                   key={r.item.id}
                   onClick={() => onSelect(r.item.id)}
-                  draggable={epicDraggable}
-                  onDragStart={epicDraggable ? (e) => onEpicDragStart(e, r.item.id) : undefined}
-                  onDragOver={isEpic ? (e) => onEpicDragOver(e, r.item.id) : undefined}
-                  onDrop={isEpic ? (e) => onEpicDrop(e, r.item.id) : undefined}
-                  onDragEnd={epicDraggable ? clearEpicDrag : undefined}
+                  draggable={rowDraggable}
+                  onDragStart={rowDraggable ? (e) => onRowDragStart(e, r.item.id) : undefined}
+                  onDragOver={(e) => onRowDragOver(e, r.item.id)}
+                  onDrop={(e) => onRowDrop(e, r.item.id)}
+                  onDragEnd={rowDraggable ? clearRowDrag : undefined}
                   className={cn(
                     'group flex items-center gap-1 px-2 cursor-pointer border-b border-neutral-100 dark:border-neutral-800',
                     isSelected
@@ -565,8 +657,10 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                     isDraggingThis && 'opacity-40',
                     dropBefore && 'shadow-[inset_0_2px_0_0_#3b82f6]',
                     dropAfter && 'shadow-[inset_0_-2px_0_0_#3b82f6]',
+                    dropOn && 'ring-2 ring-inset ring-blue-400',
                   )}
                   style={{ height: ROW_HEIGHT, paddingLeft: 8 + r.depth * 14 }}
+                  title={canEdit ? t('workItem.dragHint') : undefined}
                 >
                   <button
                     className={cn('p-0.5 text-neutral-400 dark:text-neutral-500', !r.hasChildren && 'invisible')}
@@ -577,21 +671,20 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                   >
                     {expanded.has(r.item.id) ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </button>
-                  <Badge kind={r.item.level}>{r.item.level[0].toUpperCase()}</Badge>
+                  <Badge kind={r.item.level}>{levelLabel(r.item.level)}</Badge>
+                  <span className="text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500 shrink-0">{num}</span>
                   <span className="text-xs truncate flex-1">{r.item.name}</span>
                   <span className="text-[10px] text-neutral-400 dark:text-neutral-500 w-7 text-right tabular-nums group-hover:hidden">{formatWorkDuration(wd)}</span>
                   <span className="text-[10px] text-neutral-400 dark:text-neutral-500 w-7 text-right tabular-nums group-hover:hidden">{r.item.progress}%</span>
                   {canEdit && (
                     <div className="hidden group-hover:flex items-center gap-0.5">
-                      {childLevel && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); addChild(r.item); }}
-                          className="p-1 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded text-neutral-500 dark:text-neutral-400"
-                          title={t('workItem.addLevel', { level: t(`workItem.level.${childLevel}`) })}
-                        >
-                          <Plus size={12} />
-                        </button>
-                      )}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); addChild(r.item); }}
+                        className="p-1 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded text-neutral-500 dark:text-neutral-400"
+                        title={t('workItem.addChild')}
+                      >
+                        <Plus size={12} />
+                      </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); remove(r.item); }}
                         className="p-1 hover:bg-red-100 dark:hover:bg-red-950 rounded text-neutral-500 dark:text-neutral-400 hover:text-red-600 dark:hover:text-red-400"
@@ -660,9 +753,10 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
             <div className="absolute left-0" style={{ top: HEADER_HEIGHT, width: totalWidth }}>
               {flatRows.map((r) => {
                 const rect = barRect(r);
-                const isRollup = r.hasChildren || r.item.level === 'epic';
+                const isRollup = r.hasChildren;
                 const canCreate =
                   canEdit && !isRollup && !(r.item.start_date && r.item.end_date);
+                const style = levelStyle(r.item.level);
                 const creating = createDrag?.id === r.item.id;
                 const createRect = creating
                   ? {
@@ -696,7 +790,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                           <div
                             className={cn(
                               'absolute top-1 rounded text-[10px] text-white flex items-center justify-center select-none',
-                              isRollup ? 'bg-neutral-700 dark:bg-neutral-600 cursor-default' : 'bg-blue-500 cursor-move',
+                              isRollup ? 'bg-neutral-700 dark:bg-neutral-600 cursor-default' : `${style.bar} cursor-move`,
                               drag?.id === r.item.id && 'ring-2 ring-blue-300',
                             )}
                             style={{
@@ -714,11 +808,14 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                             <div
                               className={cn(
                                 'absolute left-0 top-0 bottom-0 rounded-l',
-                                isRollup ? 'bg-neutral-900/40' : 'bg-blue-700',
+                                isRollup ? 'bg-neutral-900/40' : style.barProgress,
                               )}
                               style={{ width: `${r.item.progress}%` }}
                             />
-                            <span className="relative px-1 truncate pointer-events-none">{r.item.name}</span>
+                            <span className="relative px-1 truncate pointer-events-none">
+                              <span className="opacity-70 tabular-nums mr-1">{numbers.get(r.item.id) ?? ''}</span>
+                              {r.item.name}
+                            </span>
 
                             {!isRollup && canEdit && (
                               <>
@@ -870,26 +967,12 @@ function monthLabel(d: Date, locale: string): string {
 function flatten(items: WorkItem[], expanded: Set<string>): FlatRow[] {
   const byParent = new Map<string | null, WorkItem[]>();
   for (const it of items) {
+    if (it.deleted_at) continue;
     const k = it.parent_id ?? null;
     if (!byParent.has(k)) byParent.set(k, []);
     byParent.get(k)!.push(it);
   }
-  for (const arr of byParent.values()) {
-    if (arr.length === 0) continue;
-    if (arr[0].level === 'epic') {
-      arr.sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at));
-    } else {
-      arr.sort((a, b) => {
-        const ad = a.start_date;
-        const bd = b.start_date;
-        if (ad && bd) {
-          if (ad !== bd) return ad < bd ? -1 : 1;
-        } else if (ad) return -1;
-        else if (bd) return 1;
-        return a.created_at.localeCompare(b.created_at);
-      });
-    }
-  }
+  for (const arr of byParent.values()) arr.sort(siblingCompare);
   const out: FlatRow[] = [];
   function walk(parent: string | null, depth: number) {
     const list = byParent.get(parent) ?? [];
@@ -903,4 +986,51 @@ function flatten(items: WorkItem[], expanded: Set<string>): FlatRow[] {
   }
   walk(null, 0);
   return out;
+}
+
+// Compute position updates to move `draggedId` into `newParentId`, placed
+// next to `targetId` (or at end when null). placeAfter: true => after target.
+function computeReparentUpdates({
+  items,
+  draggedId,
+  newParentId,
+  targetId,
+  placeAfter,
+}: {
+  items: WorkItem[];
+  draggedId: string;
+  newParentId: string | null;
+  targetId: string | null;
+  placeAfter: boolean;
+}): ReorderUpdate[] {
+  const dragged = items.find((w) => w.id === draggedId);
+  if (!dragged) return [];
+  const sameParent = (dragged.parent_id ?? null) === newParentId;
+
+  const siblings = items
+    .filter((w) => (w.parent_id ?? null) === newParentId && !w.deleted_at && w.id !== draggedId)
+    .sort(siblingCompare);
+
+  let insertIdx: number;
+  if (targetId == null) {
+    insertIdx = siblings.length;
+  } else {
+    const ti = siblings.findIndex((w) => w.id === targetId);
+    insertIdx = ti < 0 ? siblings.length : (placeAfter ? ti + 1 : ti);
+  }
+
+  const next = [...siblings];
+  next.splice(insertIdx, 0, dragged);
+
+  const updates: ReorderUpdate[] = [];
+  next.forEach((w, i) => {
+    const newPos = (i + 1) * 1000;
+    const parentChange = w.id === draggedId && !sameParent;
+    if (w.position !== newPos || parentChange) {
+      const u: ReorderUpdate = { id: w.id, position: newPos };
+      if (parentChange) u.parent_id = newParentId;
+      updates.push(u);
+    }
+  });
+  return updates;
 }

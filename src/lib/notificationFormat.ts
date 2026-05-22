@@ -16,7 +16,7 @@ export function formatNotification(n: AppNotification, t: T): NotificationView {
   const actorName = n.actor ? displayName(n.actor) : null;
   const itemName = n.payload?.name || t('notifications.unknownItem');
   const projectName = n.project?.name ?? null;
-  const level = n.payload?.level ?? null;
+  const level = typeof n.payload?.level === 'number' ? `L${n.payload.level + 1}` : null;
 
   const vars: Record<string, string> = {
     actor: actorName ?? t('notifications.someone'),

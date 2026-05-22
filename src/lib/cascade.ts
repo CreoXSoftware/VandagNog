@@ -144,7 +144,7 @@ function applyParentRollup(
   const ordered = Array.from(ancestors)
     .map((id) => effective.get(id))
     .filter((w): w is WorkItem => Boolean(w))
-    .sort((a, b) => levelOrder(a.level) - levelOrder(b.level));
+    .sort((a, b) => b.level - a.level);
 
   for (const a of ordered) {
     const childIds = byParent.get(a.id) ?? [];
@@ -265,11 +265,6 @@ export function computeIncomingLagUpdates({
     }
   }
   return updates;
-}
-
-function levelOrder(level: WorkItem['level']): number {
-  // Process deepest parents first: parents-of-subtasks (tasks) before parents-of-tasks (epics).
-  return level === 'task' ? 0 : level === 'epic' ? 1 : 2;
 }
 
 function computeRollup(children: WorkItem[]): { start_date: string | null; end_date: string | null; progress: number } {

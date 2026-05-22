@@ -1,12 +1,11 @@
 import { useMemo, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
-import type { WorkItem, WorkItemLevel } from '@/types/db';
+import type { WorkItem } from '@/types/db';
 import { Button } from '@/components/ui/Button';
 import { useCreateWorkItem } from '@/hooks/useWorkItems';
 import { useT } from '@/lib/i18n';
-
-const LEVELS: WorkItemLevel[] = ['epic', 'task', 'subtask'];
+import { levelLabel } from '@/lib/levels';
 
 interface ParsedLine {
   depth: number;
@@ -49,13 +48,10 @@ export function QuickAddPanel({ projectId, selected, onClose, onLastCreated }: P
   const [busy, setBusy] = useState(false);
 
   const scope = useMemo(() => {
-    if (selected?.level === 'epic') {
-      return { baseLevel: 'task' as WorkItemLevel, parentId: selected.id, maxDepth: 1 };
+    if (selected) {
+      return { parentId: selected.id, baseLevel: selected.level + 1 };
     }
-    if (selected?.level === 'task') {
-      return { baseLevel: 'subtask' as WorkItemLevel, parentId: selected.id, maxDepth: 0 };
-    }
-    return { baseLevel: 'epic' as WorkItemLevel, parentId: null as string | null, maxDepth: 2 };
+    return { parentId: null as string | null, baseLevel: 0 };
   }, [selected]);
 
   async function submit() {
@@ -64,23 +60,16 @@ export function QuickAddPanel({ projectId, selected, onClose, onLastCreated }: P
       toast.error(t('workItem.quickAddEmpty'));
       return;
     }
-    if (parsed.some((p) => p.depth > scope.maxDepth)) {
-      toast.error(t('workItem.quickAddTooDeep'));
-      return;
-    }
     setBusy(true);
     try {
-      const baseIdx = LEVELS.indexOf(scope.baseLevel);
       const stack: { depth: number; id: string | null }[] = [{ depth: -1, id: scope.parentId }];
       let lastId: string | null = null;
       for (const line of parsed) {
         while (stack[stack.length - 1].depth >= line.depth) stack.pop();
         const parentId = stack[stack.length - 1].id;
-        const level = LEVELS[baseIdx + line.depth];
         const r = await create.mutateAsync({
           project_id: projectId,
           parent_id: parentId,
-          level,
           name: line.text,
         });
         stack.push({ depth: line.depth, id: r.id });
@@ -98,7 +87,7 @@ export function QuickAddPanel({ projectId, selected, onClose, onLastCreated }: P
   }
 
   const scopeLabel = selected && scope.parentId
-    ? t('workItem.quickAddUnder', { name: selected.name, level: t(`workItem.level.${scope.baseLevel}`) })
+    ? t('workItem.quickAddUnder', { name: selected.name, level: levelLabel(scope.baseLevel) })
     : t('workItem.quickAddRoot');
 
   return (

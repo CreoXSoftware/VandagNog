@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
 import { supabase } from '@/lib/supabase';
-import type { Dependency, NonWorkingDay, Project, WorkItem, WorkItemLevel } from '@/types/db';
+import type { Dependency, NonWorkingDay, Project, WorkItem } from '@/types/db';
 import { computeCascade, computeIncomingLagUpdates, type LagUpdate } from '@/lib/cascade';
 import { buildCalendar } from '@/components/gantt/ganttUtils';
 import { markLocalWorkItemMutation } from '@/lib/localMutationGuard';
@@ -32,7 +32,6 @@ export function useWorkItems(projectId: string | undefined) {
 export interface CreateWorkItemInput {
   project_id: string;
   parent_id: string | null;
-  level: WorkItemLevel;
   name: string;
   start_date?: string | null;
   end_date?: string | null;
@@ -51,7 +50,6 @@ export function useCreateWorkItem() {
         .insert({
           project_id: input.project_id,
           parent_id: input.parent_id,
-          level: input.level,
           name: input.name,
           start_date: input.start_date ?? null,
           end_date: input.end_date ?? null,
@@ -98,14 +96,22 @@ export function useUpdateWorkItem() {
   });
 }
 
+export interface ReorderUpdate {
+  id: string;
+  position: number;
+  parent_id?: string | null;
+}
+
 export function useReorderWorkItems() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { project_id: string; updates: { id: string; position: number }[] }) => {
+    mutationFn: async (input: { project_id: string; updates: ReorderUpdate[] }) => {
       for (const u of input.updates) {
+        const patch: { position: number; parent_id?: string | null } = { position: u.position };
+        if (u.parent_id !== undefined) patch.parent_id = u.parent_id;
         const { error } = await supabase
           .from('work_items')
-          .update({ position: u.position })
+          .update(patch)
           .eq('id', u.id);
         if (error) throw error;
       }
@@ -114,10 +120,18 @@ export function useReorderWorkItems() {
       await qc.cancelQueries({ queryKey: workItemsKey(input.project_id) });
       const prev = qc.getQueryData<WorkItem[]>(workItemsKey(input.project_id));
       if (prev) {
-        const posMap = new Map(input.updates.map((u) => [u.id, u.position]));
+        const map = new Map(input.updates.map((u) => [u.id, u]));
         qc.setQueryData<WorkItem[]>(
           workItemsKey(input.project_id),
-          prev.map((wi) => (posMap.has(wi.id) ? { ...wi, position: posMap.get(wi.id)! } as WorkItem : wi)),
+          prev.map((wi) => {
+            const u = map.get(wi.id);
+            if (!u) return wi;
+            return {
+              ...wi,
+              position: u.position,
+              ...(u.parent_id !== undefined ? { parent_id: u.parent_id } : {}),
+            } as WorkItem;
+          }),
         );
       }
       return { prev };

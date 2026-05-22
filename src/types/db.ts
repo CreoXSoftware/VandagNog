@@ -1,4 +1,4 @@
-export type WorkItemLevel = 'epic' | 'task' | 'subtask';
+export type WorkItemLevel = number;
 export type DependencyType = 'FS' | 'FF' | 'SS' | 'SF';
 export type ProjectRole = 'owner' | 'editor' | 'viewer';
 
@@ -97,7 +97,7 @@ export type NotificationEvent =
 
 export interface NotificationPayload {
   name?: string;
-  level?: 'epic' | 'task' | 'subtask';
+  level?: number;
   comment_id?: string;
   predecessor_id?: string;
   predecessor_name?: string;

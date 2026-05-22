@@ -30,15 +30,23 @@ export function DependencyEditor({ workItem, allItems, dependencies, canEdit, on
   const [addLag, setAddLag] = useState(0);
 
   const itemMap = useMemo(() => new Map(allItems.map((i) => [i.id, i])), [allItems]);
+  const childCount = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const i of allItems) {
+      if (!i.parent_id) continue;
+      m.set(i.parent_id, (m.get(i.parent_id) ?? 0) + 1);
+    }
+    return m;
+  }, [allItems]);
 
   const predecessors = dependencies.filter((d) => d.successor_id === workItem.id);
   const successors = dependencies.filter((d) => d.predecessor_id === workItem.id);
 
   const candidates = allItems.filter(
-    (i) => i.id !== workItem.id && (i.level === 'task' || i.level === 'subtask'),
+    (i) => i.id !== workItem.id && !childCount.get(i.id),
   );
 
-  const canHaveDeps = workItem.level === 'task' || workItem.level === 'subtask';
+  const canHaveDeps = !childCount.get(workItem.id);
 
   async function add() {
     if (!addId || !adding) return;
@@ -60,7 +68,7 @@ export function DependencyEditor({ workItem, allItems, dependencies, canEdit, on
   }
 
   if (!canHaveDeps) {
-    return <div className="text-xs text-neutral-500 dark:text-neutral-400">{t('dependencies.epicsCannot')}</div>;
+    return <div className="text-xs text-neutral-500 dark:text-neutral-400">{t('dependencies.rollupCannot')}</div>;
   }
 
   return (
@@ -96,7 +104,7 @@ export function DependencyEditor({ workItem, allItems, dependencies, canEdit, on
             <option value="">{t('dependencies.selectItem')}</option>
             {candidates.map((c) => (
               <option key={c.id} value={c.id}>
-                [{t(`workItem.level.${c.level}`)}] {c.name}
+                {c.name}
               </option>
             ))}
           </Select>
@@ -208,7 +216,7 @@ function DepList({ label, rows, otherKey, itemMap, canEdit, onNavigate, onDelete
             if (!other) return null;
             return (
               <div key={d.id} className="flex items-center gap-1.5 text-xs">
-                <Badge kind={other.level}>{t(`workItem.level.${other.level}`)}</Badge>
+                <Badge kind={other.level}>L{other.level + 1}</Badge>
                 <button onClick={() => onNavigate(other.id)} className="flex-1 text-left text-blue-600 dark:text-blue-400 hover:underline truncate">
                   {other.name}
                 </button>

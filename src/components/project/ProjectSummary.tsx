@@ -29,10 +29,9 @@ export function ProjectSummary({ workItems, workingDays, nonWorkingDays, members
   const stats = useMemo(() => {
     let minStart: string | null = null;
     let maxEnd: string | null = null;
-    let epics = 0;
-    let tasks = 0;
-    let subtasks = 0;
+    let roots = 0;
     let leaves = 0;
+    let maxDepth = 0;
     let weightSum = 0;
     let weightedProgress = 0;
 
@@ -46,9 +45,8 @@ export function ProjectSummary({ workItems, workingDays, nonWorkingDays, members
     }
 
     for (const w of workItems) {
-      if (w.level === 'epic') epics++;
-      else if (w.level === 'task') tasks++;
-      else subtasks++;
+      if (w.parent_id === null) roots++;
+      if (w.level > maxDepth) maxDepth = w.level;
       if (w.start_date && (!minStart || w.start_date < minStart)) minStart = w.start_date;
       if (w.end_date && (!maxEnd || w.end_date > maxEnd)) maxEnd = w.end_date;
       if (isLeaf(w)) {
@@ -80,10 +78,9 @@ export function ProjectSummary({ workItems, workingDays, nonWorkingDays, members
       end: maxEnd,
       calDays,
       workDays,
-      epics,
-      tasks,
-      subtasks,
+      roots,
       leaves,
+      maxDepth,
       total: workItems.length,
       progress,
       holidaysInRange,
@@ -129,9 +126,9 @@ export function ProjectSummary({ workItems, workingDays, nonWorkingDays, members
           <Row icon={<ListChecks size={12} />} label={t('summary.items')}>
             {t('summary.itemsBreakdown', {
               total: stats.total,
-              epics: stats.epics,
-              tasks: stats.tasks,
-              subtasks: stats.subtasks,
+              roots: stats.roots,
+              leaves: stats.leaves,
+              depth: stats.maxDepth + 1,
             })}
           </Row>
           <Row icon={<Users size={12} />} label={t('summary.members')}>
