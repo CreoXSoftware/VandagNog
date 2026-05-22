@@ -1,5 +1,5 @@
 import { addWorkingDays, countWorkingDays, diffDays, parseDate, toDateString, workingDayHops, type WorkCalendar } from '@/components/gantt/ganttUtils';
-import type { Dependency, WorkItem } from '@/types/db';
+import type { Dependency, DependencyType, WorkItem } from '@/types/db';
 
 export type WorkItemPatch = Partial<Pick<WorkItem, 'start_date' | 'end_date' | 'progress'>>;
 
@@ -16,6 +16,8 @@ interface ComputeArgs {
   dependencies: Dependency[];
   calendar: WorkCalendar;
 }
+
+const MAX_PASSES = 5000;
 
 export function computeCascade({
   rootId,
@@ -35,26 +37,89 @@ export function computeCascade({
     outgoing.set(d.predecessor_id, arr);
   }
 
-  // Effective state: clone of items with patches applied as we go.
+  const byParent = new Map<string, string[]>();
+  for (const w of itemMap.values()) {
+    if (!w.parent_id || w.deleted_at) continue;
+    if (!byParent.has(w.parent_id)) byParent.set(w.parent_id, []);
+    byParent.get(w.parent_id)!.push(w.id);
+  }
+
   const effective = new Map<string, WorkItem>(items.map((i) => [i.id, i]));
   const patches = new Map<string, WorkItemPatch>();
 
-  function applyLeafPatch(id: string, start: string, end: string) {
+  function isLeaf(id: string): boolean {
+    const kids = byParent.get(id);
+    return !kids || kids.length === 0;
+  }
+
+  function applyPatch(id: string, patch: WorkItemPatch): boolean {
     const cur = effective.get(id)!;
-    if (cur.start_date === start && cur.end_date === end) return false;
-    effective.set(id, { ...cur, start_date: start, end_date: end });
-    const existing = patches.get(id) ?? {};
-    patches.set(id, { ...existing, start_date: start, end_date: end });
+    const next = { ...cur, ...patch };
+    if (
+      next.start_date === cur.start_date &&
+      next.end_date === cur.end_date &&
+      next.progress === cur.progress
+    ) {
+      return false;
+    }
+    effective.set(id, next);
+    patches.set(id, { ...(patches.get(id) ?? {}), ...patch });
     return true;
   }
 
-  applyLeafPatch(rootId, newStart, newEnd);
+  function refreshParent(parentId: string): boolean {
+    const childIds = byParent.get(parentId) ?? [];
+    if (childIds.length === 0) return false;
+    const children = childIds
+      .map((id) => effective.get(id))
+      .filter((c): c is WorkItem => Boolean(c) && !c!.deleted_at);
+    if (children.length === 0) return false;
+    const rolled = computeRollup(children);
+    return applyPatch(parentId, rolled);
+  }
 
-  // BFS forward cascade. Bidirectional: successors snap exactly to constraint.
+  function propagateUpward(fromId: string, queue: string[]) {
+    let cur = effective.get(fromId);
+    while (cur?.parent_id) {
+      const changed = refreshParent(cur.parent_id);
+      if (changed) queue.push(cur.parent_id);
+      cur = effective.get(cur.parent_id);
+    }
+  }
+
+  function gatingChildFor(parentId: string, depType: DependencyType, side: 'pred' | 'succ'): string | null {
+    const childIds = byParent.get(parentId) ?? [];
+    const kids = childIds
+      .map((id) => effective.get(id))
+      .filter((c): c is WorkItem => Boolean(c) && !c!.deleted_at);
+    if (kids.length === 0) return null;
+    const usesStart = side === 'pred'
+      ? depType === 'SS' || depType === 'SF'
+      : depType === 'FS' || depType === 'SS';
+    let best = kids[0];
+    if (usesStart) {
+      for (const k of kids) {
+        if (k.start_date && (!best.start_date || k.start_date < best.start_date)) best = k;
+      }
+    } else {
+      for (const k of kids) {
+        if (k.end_date && (!best.end_date || k.end_date > best.end_date)) best = k;
+      }
+    }
+    return best.id;
+  }
+
+  // Initial root patch
+  applyPatch(rootId, { start_date: newStart, end_date: newEnd });
+
   const queue: string[] = [rootId];
-  const visited = new Set<string>([rootId]);
+  propagateUpward(rootId, queue);
 
+  let passes = 0;
   while (queue.length > 0) {
+    if (++passes > MAX_PASSES) {
+      return { patches: new Map(), error: 'Cascade did not converge' };
+    }
     const predId = queue.shift()!;
     const pred = effective.get(predId)!;
     const edges = outgoing.get(predId) ?? [];
@@ -70,10 +135,18 @@ export function computeCascade({
       const predEnd = parseDate(pred.end_date);
       if (!predStart || !predEnd) continue;
 
-      const succStartCur = parseDate(succ.start_date);
-      const succEndCur = parseDate(succ.end_date);
-      const workDayDur = succStartCur && succEndCur
-        ? Math.max(countWorkingDays(succStartCur, succEndCur, calendar) - 1, 0)
+      let targetId = succ.id;
+      if (!isLeaf(succ.id)) {
+        const gating = gatingChildFor(succ.id, dep.type, 'succ');
+        if (!gating) continue;
+        targetId = gating;
+      }
+
+      const target = effective.get(targetId)!;
+      const tStart = parseDate(target.start_date);
+      const tEnd = parseDate(target.end_date);
+      const workDayDur = tStart && tEnd
+        ? Math.max(countWorkingDays(tStart, tEnd, calendar) - 1, 0)
         : 0;
 
       let nextStart: Date;
@@ -97,77 +170,20 @@ export function computeCascade({
           break;
       }
 
-      const newStartStr = toDateString(nextStart);
-      const newEndStr = toDateString(nextEnd);
-
-      const changed = applyLeafPatch(succ.id, newStartStr, newEndStr);
-      if (changed && !visited.has(succ.id)) {
-        visited.add(succ.id);
-        queue.push(succ.id);
-      } else if (changed) {
-        // already visited but dates changed again — re-enqueue to propagate
-        queue.push(succ.id);
+      const changed = applyPatch(targetId, {
+        start_date: toDateString(nextStart),
+        end_date: toDateString(nextEnd),
+      });
+      if (changed) {
+        queue.push(targetId);
+        propagateUpward(targetId, queue);
       }
     }
   }
 
-  // Parent rollup: bottom-up recompute for ancestors of any patched leaf.
-  applyParentRollup(effective, patches);
-
   return { patches, error: null };
 }
 
-function applyParentRollup(
-  effective: Map<string, WorkItem>,
-  patches: Map<string, WorkItemPatch>,
-) {
-  // Children ids by parent id. Resolve to WorkItem via `effective` at rollup
-  // time so updates from earlier rollups (e.g. task) are visible to later
-  // ancestors (e.g. epic).
-  const byParent = new Map<string, string[]>();
-  for (const w of effective.values()) {
-    if (!w.parent_id || w.deleted_at) continue;
-    if (!byParent.has(w.parent_id)) byParent.set(w.parent_id, []);
-    byParent.get(w.parent_id)!.push(w.id);
-  }
-
-  // Ancestors of any patched leaf, ordered deepest first (subtask < task < epic).
-  const ancestors = new Set<string>();
-  for (const id of patches.keys()) {
-    let cur = effective.get(id);
-    while (cur?.parent_id) {
-      ancestors.add(cur.parent_id);
-      cur = effective.get(cur.parent_id);
-    }
-  }
-
-  const ordered = Array.from(ancestors)
-    .map((id) => effective.get(id))
-    .filter((w): w is WorkItem => Boolean(w))
-    .sort((a, b) => b.level - a.level);
-
-  for (const a of ordered) {
-    const childIds = byParent.get(a.id) ?? [];
-    if (childIds.length === 0) continue;
-    const children = childIds
-      .map((id) => effective.get(id))
-      .filter((c): c is WorkItem => Boolean(c));
-    if (children.length === 0) continue;
-    const cur = effective.get(a.id) ?? a;
-    const rolled = computeRollup(children);
-    const changed =
-      rolled.start_date !== cur.start_date ||
-      rolled.end_date !== cur.end_date ||
-      rolled.progress !== cur.progress;
-    if (!changed) continue;
-    effective.set(a.id, { ...cur, ...rolled });
-    const existing = patches.get(a.id) ?? {};
-    patches.set(a.id, { ...existing, ...rolled });
-  }
-}
-
-// Given a (possibly modified) dependency, compute where the successor must sit
-// to satisfy it, preserving the successor's current working-day duration.
 export function computeSuccessorPositionFromDep(
   dep: Dependency,
   pred: WorkItem,
@@ -221,8 +237,6 @@ interface LagArgs {
   calendar: WorkCalendar;
 }
 
-// Compute new lag_days for each dependency where the moved item is the successor,
-// so the next predecessor move preserves the user-set gap.
 export function computeIncomingLagUpdates({
   rootId,
   newStart,

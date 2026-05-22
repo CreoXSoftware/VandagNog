@@ -35,21 +35,13 @@ export function DependencyEditor({ workItem, allItems, dependencies, canEdit, on
 
   const itemMap = useMemo(() => new Map(allItems.map((i) => [i.id, i])), [allItems]);
   const numbers = useMemo(() => outlineNumbers(allItems), [allItems]);
-  const childCount = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const i of allItems) {
-      if (!i.parent_id) continue;
-      m.set(i.parent_id, (m.get(i.parent_id) ?? 0) + 1);
-    }
-    return m;
-  }, [allItems]);
 
   const predecessors = dependencies.filter((d) => d.successor_id === workItem.id);
   const successors = dependencies.filter((d) => d.predecessor_id === workItem.id);
 
   const candidates = useMemo(
-    () => allItems.filter((i) => i.id !== workItem.id && !childCount.get(i.id)),
-    [allItems, workItem.id, childCount],
+    () => allItems.filter((i) => i.id !== workItem.id && !i.deleted_at),
+    [allItems, workItem.id],
   );
 
   // Tree-order rows for the picker: include non-leaf ancestors of candidates as
@@ -77,8 +69,6 @@ export function DependencyEditor({ workItem, allItems, dependencies, canEdit, on
     return items.map((i) => ({ item: i, selectable: candidateIds.has(i.id) }));
   }, [allItems, candidates, numbers]);
 
-  const canHaveDeps = !childCount.get(workItem.id);
-
   async function add() {
     if (!addId || !adding) return;
     try {
@@ -96,10 +86,6 @@ export function DependencyEditor({ workItem, allItems, dependencies, canEdit, on
     } catch (e) {
       toast.error((e as Error).message);
     }
-  }
-
-  if (!canHaveDeps) {
-    return <div className="text-xs text-neutral-500 dark:text-neutral-400">{t('dependencies.rollupCannot')}</div>;
   }
 
   return (

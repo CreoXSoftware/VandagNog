@@ -30,7 +30,7 @@ export function Header() {
   return (
     <header className="h-16 shrink-0 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 flex items-center px-4 gap-4">
       <Link to="/projects" className="flex items-center" aria-label={t('app.name')}>
-        <img src={theme === 'dark' ? logoDark : logoLight} alt={t('app.name')} className="h-14 w-auto rounded-md" />
+        <img src={theme === 'dark' ? logoDark : logoLight} alt={t('app.name')} className="h-10 w-auto rounded-md" />
       </Link>
       <nav className="flex-1" />
       <select

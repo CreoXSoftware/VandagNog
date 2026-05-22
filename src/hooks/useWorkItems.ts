@@ -33,8 +33,11 @@ export interface CreateWorkItemInput {
   project_id: string;
   parent_id: string | null;
   name: string;
+  description?: string | null;
+  deliverable?: string | null;
   start_date?: string | null;
   end_date?: string | null;
+  progress?: number;
   position?: number;
 }
 
@@ -51,8 +54,11 @@ export function useCreateWorkItem() {
           project_id: input.project_id,
           parent_id: input.parent_id,
           name: input.name,
+          description: input.description ?? null,
+          deliverable: input.deliverable ?? null,
           start_date: input.start_date ?? null,
           end_date: input.end_date ?? null,
+          progress: input.progress ?? 0,
           position: input.position ?? 0,
           created_by: userId,
         })
