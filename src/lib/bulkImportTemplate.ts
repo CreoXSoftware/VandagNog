@@ -25,12 +25,12 @@ export const IMPORT_TEMPLATE = `{
     {
       "id": "t2",
       "name": "Phase 2 - Build",
+      "predecessors": [{ "id": "t1", "type": "FS", "lag_days": 2 }],
       "children": [
         {
           "id": "t2.1",
           "name": "Build kickoff",
-          "duration_days": 5,
-          "predecessors": [{ "id": "t1.2", "type": "FS", "lag_days": 2 }]
+          "duration_days": 5
         },
         {
           "id": "t2.2",
@@ -39,6 +39,12 @@ export const IMPORT_TEMPLATE = `{
           "predecessors": [{ "id": "t2.1", "type": "FS", "lag_days": 0 }]
         }
       ]
+    },
+    {
+      "id": "t3",
+      "name": "Sign-off",
+      "duration_days": 1,
+      "predecessors": [{ "id": "t2", "type": "FS", "lag_days": 0 }]
     }
   ]
 }`;
@@ -69,11 +75,11 @@ SCHEMA
 RULES
 - Use "FS" unless the source material explicitly indicates otherwise.
 - Reference predecessors/successors by the temp "id" of another task in this same document. Do NOT invent IDs that aren't defined.
-- Dependencies must link LEAF tasks only (tasks without "children"). Parent/summary tasks cannot have predecessors or successors and cannot be referenced by them - their dates roll up from their children.
+- Dependencies CAN be placed on parent (summary) tasks. A parent task's dates are rolled up from its children automatically; a dep on a parent resolves to whichever child gates the relevant edge (latest-ending child for finish-side, earliest-starting child for start-side) and recalculates whenever children change. Use parent-level deps when the source material describes phase-to-phase ordering ("Phase 2 starts after Phase 1 ends"); use leaf-level deps when a specific sub-task drives the next one.
+- Do NOT set start_date / end_date / duration_days on parent tasks (tasks that have "children"). Parent dates are computed from children and any values you write will be overwritten. Leave dates only on leaf tasks.
 - Do NOT invent dependencies that are not stated or strongly implied in the source.
 - Express hierarchy via nested "children" arrays. Do not flatten with a parent_id field.
-- Do NOT set start_date / end_date / duration_days on parent tasks (those with "children"); leave dates only on leaves.
-- If only a duration is given (no end_date), use "duration_days" and "start_date".
+- If only a duration is given (no end_date), use "duration_days" and "start_date" together on a leaf.
 - Omit fields you don't have data for - don't fabricate.
 
 EXAMPLE
