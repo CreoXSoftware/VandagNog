@@ -3,6 +3,7 @@ import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import { useAuth } from '@/hooks/useAuth';
 import { useNotificationsRealtime } from '@/hooks/useNotifications';
+import { FloatingTimerWidget } from '@/components/tracker/FloatingTimerWidget';
 
 export function AppShell() {
   const { user } = useAuth();
@@ -16,6 +17,7 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+      <FloatingTimerWidget />
     </div>
   );
 }

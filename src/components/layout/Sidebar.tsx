@@ -16,7 +16,7 @@ const items: NavItem[] = [
   { to: '/projects', labelKey: 'nav.projects', icon: FolderKanban, matchPrefix: '/projects' },
   { to: '/teams', labelKey: 'nav.teams', icon: Users, matchPrefix: '/teams' },
   { to: '/clients', labelKey: 'nav.clients', icon: Building2, matchPrefix: '/clients' },
-  { to: '/tracker', labelKey: 'nav.tracker', icon: Timer, matchPrefix: '/tracker', disabled: true, comingSoonKey: 'nav.trackerSoon' },
+  { to: '/tracker', labelKey: 'nav.tracker', icon: Timer, matchPrefix: '/tracker' },
 ];
 
 const STORAGE_KEY = 'vn.sidebar.collapsed';

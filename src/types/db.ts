@@ -196,3 +196,30 @@ export interface UserSettings {
   notifications_enabled: boolean;
   updated_at: string;
 }
+
+export interface TimeEntry {
+  id: string;
+  user_id: string;
+  project_id: string;
+  work_item_id: string | null;
+  custom_task_text: string | null;
+  notes: string | null;
+  start_at: string;
+  end_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TrackerTaskMode = 'none' | 'workItem' | 'custom';
+
+export interface TrackerTarget {
+  project_id: string;
+  work_item_id: string | null;
+  custom_task_text: string | null;
+}
+
+export interface TrackerTargetLabel extends TrackerTarget {
+  client_name: string | null;
+  project_name: string;
+  work_item_path: string[] | null;
+}
