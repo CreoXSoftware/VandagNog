@@ -13,6 +13,7 @@ import { CalendarView } from '@/components/calendar/CalendarView';
 import { MembersPanel } from '@/components/members/MembersPanel';
 import { EditProjectDialog } from '@/components/project/EditProjectDialog';
 import { ProjectSummary } from '@/components/project/ProjectSummary';
+import { ProjectClientField } from '@/components/client/ProjectClientField';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/Tooltip';
 import { cn } from '@/lib/utils';
 import type { ProjectRole } from '@/types/db';
@@ -86,6 +87,7 @@ export function ProjectPage() {
             <Pencil size={14} />
           </button>
         )}
+        <ProjectClientField projectId={projectId} canEdit={role === 'owner'} />
         <div className="flex-1" />
         <ProjectSummary
           workItems={workItems}

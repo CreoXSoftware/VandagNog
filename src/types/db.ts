@@ -12,6 +12,39 @@ export interface Project {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  client_id: string | null;
+}
+
+export type ClientScope = 'private' | 'team';
+
+export interface Client {
+  id: string;
+  name: string;
+  owner_user_id: string | null;
+  team_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+export interface VisibleClient {
+  id: string;
+  name: string;
+  scope: ClientScope;
+  team_id: string | null;
+  team_name: string | null;
+}
+
+export interface ProjectClientInfo {
+  project_id: string;
+  client_id: string;
+  client_name: string;
+  scope: ClientScope;
+  team_id: string | null;
+  team_name: string | null;
+  owner_user_id: string | null;
+  owner_display_name: string | null;
 }
 
 export interface ProjectMember {
