@@ -26,6 +26,7 @@ export function useDependencies(projectId: string | undefined) {
 
 export function useCreateDependency() {
   const qc = useQueryClient();
+  const pendingReschedRef = useRef<{ id: string; start: string; end: string } | null>(null);
   return useMutation({
     mutationFn: async (input: {
       project_id: string;
@@ -36,9 +37,75 @@ export function useCreateDependency() {
     }): Promise<Dependency> => {
       const { data, error } = await supabase.from('dependencies').insert(input).select().single();
       if (error) throw error;
+      const r = pendingReschedRef.current;
+      pendingReschedRef.current = null;
+      if (r) {
+        const { error: re } = await supabase.rpc('reschedule_from', {
+          p_work_item_id: r.id,
+          p_new_start: r.start,
+          p_new_end: r.end,
+        });
+        if (re) throw re;
+      }
       return data as Dependency;
     },
-    onSuccess: (d) => qc.invalidateQueries({ queryKey: dependenciesKey(d.project_id) }),
+    onMutate: async (input) => {
+      markLocalWorkItemMutation();
+      await Promise.all([
+        qc.cancelQueries({ queryKey: dependenciesKey(input.project_id) }),
+        qc.cancelQueries({ queryKey: workItemsKey(input.project_id) }),
+      ]);
+      const prev = qc.getQueryData<WorkItem[]>(workItemsKey(input.project_id));
+      const prevDeps = qc.getQueryData<Dependency[]>(dependenciesKey(input.project_id)) ?? [];
+      if (!prev) return { prev, prevDeps };
+
+      const pred = prev.find((w) => w.id === input.predecessor_id);
+      const succ = prev.find((w) => w.id === input.successor_id);
+      if (!pred || !succ) return { prev, prevDeps };
+
+      const project = qc.getQueryData<Project>(projectKey(input.project_id));
+      const nonWorking = qc.getQueryData<NonWorkingDay[]>(nonWorkingDaysKey(input.project_id)) ?? [];
+      const calendar = buildCalendar(project?.working_days ?? [1, 2, 3, 4, 5], nonWorking);
+
+      const provisionalDep: Dependency = {
+        id: 'pending',
+        project_id: input.project_id,
+        predecessor_id: input.predecessor_id,
+        successor_id: input.successor_id,
+        type: input.type,
+        lag_days: input.lag_days,
+      } as Dependency;
+      const pos = computeSuccessorPositionFromDep(provisionalDep, pred, succ, calendar);
+      if (pos && (pos.newStart !== succ.start_date || pos.newEnd !== succ.end_date)) {
+        const result = computeCascade({
+          rootId: succ.id,
+          newStart: pos.newStart,
+          newEnd: pos.newEnd,
+          items: prev,
+          dependencies: [...prevDeps, provisionalDep],
+          calendar,
+        });
+        qc.setQueryData<WorkItem[]>(
+          workItemsKey(input.project_id),
+          prev.map((wi) => {
+            const p = result.patches.get(wi.id);
+            return p ? ({ ...wi, ...p } as WorkItem) : wi;
+          }),
+        );
+        pendingReschedRef.current = { id: succ.id, start: pos.newStart, end: pos.newEnd };
+      }
+
+      return { prev, prevDeps };
+    },
+    onError: (_e, input, ctx) => {
+      pendingReschedRef.current = null;
+      if (ctx?.prev) qc.setQueryData(workItemsKey(input.project_id), ctx.prev);
+      if (ctx?.prevDeps) qc.setQueryData(dependenciesKey(input.project_id), ctx.prevDeps);
+    },
+    onSuccess: (d) => {
+      markLocalWorkItemMutation();
+      qc.invalidateQueries({ queryKey: dependenciesKey(d.project_id) });
+    },
   });
 }
 

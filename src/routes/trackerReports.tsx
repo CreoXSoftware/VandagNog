@@ -106,12 +106,12 @@ export function TrackerReportsPage() {
           <PageTabs onReports={onReports} />
         </div>
 
-        <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-3 space-y-3">
-          <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+        <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 space-y-4">
+          <div className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
             <FilterIcon size={12} /> {t('tracker.filters')}
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-x-3 gap-y-3">
             <Field label={t('tracker.from')}>
               <Input type="date" value={filters.since} onChange={(e) => patch({ since: e.target.value })} />
             </Field>
@@ -284,9 +284,9 @@ function filterChips(
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div>
-      <label className="text-xs text-neutral-500 dark:text-neutral-400">{label}</label>
-      {children}
+    <div className="flex flex-col gap-1 min-w-0">
+      <label className="text-xs font-medium text-neutral-500 dark:text-neutral-400">{label}</label>
+      <div className="[&>select]:w-full [&>input]:w-full">{children}</div>
     </div>
   );
 }
