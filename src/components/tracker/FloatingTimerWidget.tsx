@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Briefcase, Minus, Play, Square, Timer } from 'lucide-react';
+import { GripVertical, Minus, Play, Square, Timer } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '@/lib/i18n';
 import {
@@ -49,8 +49,8 @@ export function FloatingTimerWidget() {
   useEffect(() => {
     function reclamp() {
       const el = collapsed ? collapsedBtnRef.current : widgetRef.current;
-      const w = el?.offsetWidth ?? (collapsed ? 48 : 288);
-      const h = el?.offsetHeight ?? (collapsed ? 48 : 210);
+      const w = el?.offsetWidth ?? (collapsed ? 48 : 320);
+      const h = el?.offsetHeight ?? (collapsed ? 48 : 40);
       setPos((p) => clampPos(p, w, h));
     }
     reclamp();
@@ -108,8 +108,8 @@ export function FloatingTimerWidget() {
     if (!s.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
     s.moved = true;
     const el = collapsed ? collapsedBtnRef.current : widgetRef.current;
-    const w = el?.offsetWidth ?? (collapsed ? 48 : 288);
-    const h = el?.offsetHeight ?? (collapsed ? 48 : 210);
+    const w = el?.offsetWidth ?? (collapsed ? 48 : 320);
+    const h = el?.offsetHeight ?? (collapsed ? 48 : 40);
     setPos(clampPos({ x: s.origX + dx, y: s.origY + dy }, w, h));
   }, [collapsed]);
   const onDragEnd = useCallback(() => {
@@ -123,14 +123,13 @@ export function FloatingTimerWidget() {
       setPickerOpen(true);
       return;
     }
+    pushRecent(target);
     try {
       await start.mutateAsync({
         project_id: target.project_id,
         work_item_id: target.work_item_id,
         custom_task_text: target.custom_task_text,
       });
-      pushRecent(target);
-      toast.success(t('tracker.timerStarted'));
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -138,7 +137,6 @@ export function FloatingTimerWidget() {
   async function onStop() {
     try {
       await stop.mutateAsync();
-      toast.success(t('tracker.timerStopped'));
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -186,80 +184,69 @@ export function FloatingTimerWidget() {
           ref={widgetRef}
           className={[
             base, runningRing,
-            'w-72 rounded-xl bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800',
+            'h-10 rounded-full bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 flex items-center pl-1 pr-1 gap-1',
           ].join(' ')}
           style={{ left: pos.x, top: pos.y }}
         >
-          {/* Drag handle / header */}
           <div
             onPointerDown={onDragStart}
             onPointerMove={onDragMove}
             onPointerUp={onDragEnd}
-            className="flex items-center justify-between px-3 h-8 border-b border-neutral-200 dark:border-neutral-800 cursor-grab active:cursor-grabbing"
+            className="h-8 w-5 flex items-center justify-center text-neutral-400 cursor-grab active:cursor-grabbing"
+            title={t('tracker.liveTimer')}
           >
-            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
-              <Timer size={12} /> {running ? t('tracker.running') : t('tracker.liveTimer')}
-            </div>
-            <button
-              type="button"
-              data-no-drag
-              onClick={() => setCollapsed(true)}
-              aria-label={t('tracker.widgetCollapse')}
-              title={t('tracker.widgetCollapse')}
-              className="p-1 rounded text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-            >
-              <Minus size={12} />
-            </button>
+            <GripVertical size={14} />
           </div>
 
-          <div className="p-3 space-y-3">
-            <div className="font-mono text-3xl tabular-nums text-center text-neutral-900 dark:text-neutral-100">
-              {formatHMS(elapsedMs)}
-            </div>
+          <button
+            type="button"
+            data-no-drag
+            onClick={() => setPickerOpen(true)}
+            disabled={running}
+            title={running ? t('tracker.cannotChangeRunning') : t('tracker.pickTarget')}
+            className="h-8 max-w-[180px] min-w-0 px-2 rounded-full text-xs text-left hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-70 disabled:cursor-default truncate"
+          >
+            {label ? (
+              <span className="truncate block text-neutral-900 dark:text-neutral-100">
+                {label[label.length - 1]}
+              </span>
+            ) : (
+              <span className="text-neutral-400 dark:text-neutral-500">{t('tracker.pickTarget')}</span>
+            )}
+          </button>
 
-            <div className="flex items-center gap-2" data-no-drag>
-              <button
-                type="button"
-                onClick={() => setPickerOpen(true)}
-                disabled={running}
-                title={running ? t('tracker.cannotChangeRunning') : t('tracker.pickTarget')}
-                className="h-9 w-9 shrink-0 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 flex items-center justify-center hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                aria-label={t('tracker.pickTarget')}
-              >
-                <Briefcase size={14} />
-              </button>
-              <div className="flex-1 min-w-0 text-xs">
-                {label ? (
-                  <div className="space-y-0.5">
-                    <div className="text-neutral-500 dark:text-neutral-400 truncate">
-                      {label.slice(0, -1).join(' › ') || '—'}
-                    </div>
-                    <div className="font-medium text-neutral-900 dark:text-neutral-100 truncate">
-                      {label[label.length - 1]}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-neutral-400 dark:text-neutral-500">{t('tracker.pickTarget')}</div>
-                )}
-              </div>
-            </div>
-
-            <button
-              type="button"
-              data-no-drag
-              onClick={running ? onStop : onStart}
-              disabled={(!running && !target) || start.isPending || stop.isPending}
-              className={[
-                'w-full h-12 rounded-md font-medium text-sm flex items-center justify-center gap-2 transition-colors',
-                running
-                  ? 'bg-red-600 hover:bg-red-500 text-white'
-                  : 'bg-neutral-900 dark:bg-neutral-100 text-neutral-50 dark:text-neutral-900 hover:opacity-90',
-                'disabled:opacity-50 disabled:cursor-not-allowed',
-              ].join(' ')}
-            >
-              {running ? <><Square size={16} /> {t('tracker.stop')}</> : <><Play size={16} /> {t('tracker.start')}</>}
-            </button>
+          <div className="font-mono text-sm tabular-nums px-2 text-neutral-900 dark:text-neutral-100">
+            {formatHMS(elapsedMs)}
           </div>
+
+          <button
+            type="button"
+            data-no-drag
+            onClick={running ? onStop : onStart}
+            disabled={(!running && !target) || start.isPending || stop.isPending}
+            aria-label={running ? t('tracker.stop') : t('tracker.start')}
+            title={running ? t('tracker.stop') : t('tracker.start')}
+            className={[
+              'h-8 w-8 rounded-full flex items-center justify-center transition-colors shrink-0',
+              running
+                ? 'bg-red-600 hover:bg-red-500 text-white'
+                : 'bg-neutral-900 dark:bg-neutral-100 text-neutral-50 dark:text-neutral-900 hover:opacity-90',
+              'disabled:opacity-50 disabled:cursor-not-allowed',
+            ].join(' ')}
+          >
+            {running ? <Square size={14} /> : <Play size={14} />}
+          </button>
+
+          <button
+            type="button"
+            data-no-drag
+            onClick={() => setCollapsed(true)}
+            aria-label={t('tracker.widgetCollapse')}
+            title={t('tracker.widgetCollapse')}
+            className="h-8 w-6 rounded text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center justify-center"
+          >
+            <Minus size={12} />
+          </button>
         </div>
       )}
 

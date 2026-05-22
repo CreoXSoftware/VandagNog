@@ -93,7 +93,26 @@ export function useStartTimer() {
       if (error) throw error;
       return data as string;
     },
-    onSuccess: () => invalidateAll(qc),
+    onMutate: async (input) => {
+      await qc.cancelQueries({ queryKey: activeTimerKey });
+      const prev = qc.getQueryData<TimeEntry | null>(activeTimerKey);
+      const optimistic = {
+        id: '__optimistic__',
+        user_id: '__optimistic__',
+        project_id: input.project_id,
+        work_item_id: input.work_item_id ?? null,
+        custom_task_text: input.custom_task_text ?? null,
+        notes: input.notes ?? null,
+        start_at: new Date().toISOString(),
+        end_at: null,
+      } as unknown as TimeEntry;
+      qc.setQueryData(activeTimerKey, optimistic);
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx && 'prev' in ctx) qc.setQueryData(activeTimerKey, ctx.prev ?? null);
+    },
+    onSettled: () => invalidateAll(qc),
   });
 }
 
@@ -105,7 +124,16 @@ export function useStopTimer() {
       if (error) throw error;
       return (data as string | null) ?? null;
     },
-    onSuccess: () => invalidateAll(qc),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: activeTimerKey });
+      const prev = qc.getQueryData<TimeEntry | null>(activeTimerKey);
+      qc.setQueryData(activeTimerKey, null);
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx && 'prev' in ctx) qc.setQueryData(activeTimerKey, ctx.prev ?? null);
+    },
+    onSettled: () => invalidateAll(qc),
   });
 }
 
