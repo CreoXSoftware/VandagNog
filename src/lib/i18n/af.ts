@@ -225,5 +225,23 @@ export const af: Dict = {
     collapseAll: 'Vou alles in',
     workItem: 'Werkitem',
     visibleTotal: '{visible} sigbaar · {total} totaal',
+    filter: {
+      assignee: 'Toegewys',
+      status: 'Status',
+      dateRange: 'Datumreeks',
+      dateRangeHint: 'Items aktief in hierdie venster word gewys.',
+      depth: 'Diepte',
+      upTo: 'Tot {level}',
+      assignedToMe: 'Aan my toegewys',
+      createdByMe: 'Deur my geskep',
+      clear: 'Maak skoon',
+      clearAll: 'Maak alles skoon',
+      statusValue: {
+        not_started: 'Nog nie begin',
+        in_progress: 'Aan die gang',
+        completed: 'Voltooi',
+        overdue: 'Agterstallig',
+      },
+    },
   },
 };

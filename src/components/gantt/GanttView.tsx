@@ -24,7 +24,17 @@ import { Badge } from '@/components/ui/Badge';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/Tooltip';
 import { QuickAddPanel } from '@/components/workitem/QuickAddPanel';
 import { useI18n, useT } from '@/lib/i18n';
+import { useAuth } from '@/hooks/useAuth';
 import { levelStyle, levelLabel, outlineNumbers, siblingCompare } from '@/lib/levels';
+import { GanttFilters } from './GanttFilters';
+import {
+  EMPTY_FILTER,
+  ancestorIds,
+  isFilterActive,
+  matchedIds,
+  type GanttFilterState,
+} from './filterLogic';
+import type { ProjectMember } from '@/types/db';
 
 interface Props {
   projectId: string;
@@ -32,6 +42,7 @@ interface Props {
   dependencies: Dependency[];
   workingDays: number[];
   nonWorkingDays: NonWorkingDay[];
+  members: ProjectMember[];
   onSelect: (id: string) => void;
   onCreate: (id: string) => void;
   canEdit: boolean;
@@ -42,6 +53,7 @@ interface FlatRow {
   item: WorkItem;
   depth: number;
   hasChildren: boolean;
+  dimmed: boolean;
 }
 
 type DragMode = 'move' | 'resize-left' | 'resize-right';
@@ -59,7 +71,7 @@ const TREE_WIDTH_MIN = 220;
 const TREE_WIDTH_MAX = 720;
 const TREE_WIDTH_KEY = 'gantt.treeWidth';
 
-export function GanttView({ projectId, workItems, dependencies, workingDays, nonWorkingDays, onSelect, onCreate, canEdit, selectedId }: Props) {
+export function GanttView({ projectId, workItems, dependencies, workingDays, nonWorkingDays, members, onSelect, onCreate, canEdit, selectedId }: Props) {
   const reschedule = useRescheduleFrom();
   const create = useCreateWorkItem();
   const reorder = useReorderWorkItems();
@@ -73,7 +85,49 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     return new Set(workItems.filter((w) => w.level < 2).map((w) => w.id));
   });
 
-  const flatRows = useMemo(() => flatten(workItems, expanded), [workItems, expanded]);
+  const { user } = useAuth();
+  const filterStorageKey = `gantt.filter.${projectId}`;
+  const [filter, setFilterState] = useState<GanttFilterState>(() => {
+    try {
+      const raw = window.localStorage.getItem(filterStorageKey);
+      if (raw) return { ...EMPTY_FILTER, ...JSON.parse(raw) } as GanttFilterState;
+    } catch { /* ignore */ }
+    return EMPTY_FILTER;
+  });
+  const setFilter = useCallback((f: GanttFilterState) => {
+    setFilterState(f);
+    try { window.localStorage.setItem(filterStorageKey, JSON.stringify(f)); } catch { /* ignore */ }
+  }, [filterStorageKey]);
+
+  const { visibleIds, dimmedIds } = useMemo(() => {
+    if (!isFilterActive(filter)) {
+      return { visibleIds: null as Set<string> | null, dimmedIds: new Set<string>() };
+    }
+    const matched = matchedIds({
+      items: workItems,
+      dependencies,
+      filter,
+      currentUserId: user?.id ?? null,
+    });
+    const ancestors = ancestorIds(workItems, matched);
+    const visible = new Set<string>([...matched, ...ancestors]);
+    return { visibleIds: visible, dimmedIds: ancestors };
+  }, [filter, workItems, dependencies, user?.id]);
+
+  // Auto-expand ancestors when filter shows them; otherwise user's expand state.
+  useEffect(() => {
+    if (!visibleIds) return;
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      for (const id of dimmedIds) next.add(id);
+      return next;
+    });
+  }, [visibleIds, dimmedIds]);
+
+  const flatRows = useMemo(
+    () => flatten(workItems, expanded, visibleIds, dimmedIds),
+    [workItems, expanded, visibleIds, dimmedIds],
+  );
   const numbers = useMemo(() => outlineNumbers(workItems), [workItems]);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [createDrag, setCreateDrag] = useState<{ id: string; anchor: Date; previewStart: Date; previewEnd: Date } | null>(null);
@@ -532,6 +586,13 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   return (
     <div className="h-full flex flex-col bg-white dark:bg-neutral-900">
       <div className="h-10 px-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center gap-2 text-xs shrink-0">
+        <GanttFilters
+          filter={filter}
+          setFilter={setFilter}
+          members={members}
+          workItems={workItems}
+          currentUserId={user?.id ?? null}
+        />
         <div className="flex-1" />
         <div className="flex items-center gap-1 mr-2">
           <button
@@ -655,6 +716,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                       ? 'bg-blue-50 dark:bg-blue-950/40'
                       : 'hover:bg-neutral-50 dark:hover:bg-neutral-800',
                     isDraggingThis && 'opacity-40',
+                    r.dimmed && 'opacity-50',
                     dropBefore && 'shadow-[inset_0_2px_0_0_#3b82f6]',
                     dropAfter && 'shadow-[inset_0_-2px_0_0_#3b82f6]',
                     dropOn && 'ring-2 ring-inset ring-blue-400',
@@ -770,6 +832,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                     className={cn(
                       'relative border-b border-neutral-100 dark:border-neutral-800',
                       canCreate && !rect && 'cursor-crosshair',
+                      r.dimmed && 'opacity-50',
                     )}
                     style={{ height: ROW_HEIGHT }}
                     onPointerDown={canCreate ? (e) => startCreateDrag(e, r) : undefined}
@@ -964,10 +1027,16 @@ function monthLabel(d: Date, locale: string): string {
   return d.toLocaleDateString(locale, { month: 'short', year: 'numeric' });
 }
 
-function flatten(items: WorkItem[], expanded: Set<string>): FlatRow[] {
+function flatten(
+  items: WorkItem[],
+  expanded: Set<string>,
+  visibleIds: Set<string> | null,
+  dimmedIds: Set<string>,
+): FlatRow[] {
   const byParent = new Map<string | null, WorkItem[]>();
   for (const it of items) {
     if (it.deleted_at) continue;
+    if (visibleIds && !visibleIds.has(it.id)) continue;
     const k = it.parent_id ?? null;
     if (!byParent.has(k)) byParent.set(k, []);
     byParent.get(k)!.push(it);
@@ -978,7 +1047,12 @@ function flatten(items: WorkItem[], expanded: Set<string>): FlatRow[] {
     const list = byParent.get(parent) ?? [];
     for (const it of list) {
       const children = byParent.get(it.id) ?? [];
-      out.push({ item: it, depth, hasChildren: children.length > 0 });
+      out.push({
+        item: it,
+        depth,
+        hasChildren: children.length > 0,
+        dimmed: dimmedIds.has(it.id),
+      });
       if (children.length > 0 && expanded.has(it.id)) {
         walk(it.id, depth + 1);
       }

@@ -9,6 +9,7 @@ import type { Dependency, DependencyType, WorkItem } from '@/types/db';
 import { useCreateDependency, useDeleteDependency, useUpdateDependency } from '@/hooks/useDependencies';
 import { toast } from 'sonner';
 import { useT } from '@/lib/i18n';
+import { outlineNumbers } from '@/lib/levels';
 
 interface Props {
   workItem: WorkItem;
@@ -17,6 +18,9 @@ interface Props {
   canEdit: boolean;
   onNavigate: (id: string) => void;
 }
+
+const NBSP = ' ';
+const INDENT = NBSP.repeat(4);
 
 export function DependencyEditor({ workItem, allItems, dependencies, canEdit, onNavigate }: Props) {
   const create = useCreateDependency();
@@ -30,6 +34,7 @@ export function DependencyEditor({ workItem, allItems, dependencies, canEdit, on
   const [addLag, setAddLag] = useState(0);
 
   const itemMap = useMemo(() => new Map(allItems.map((i) => [i.id, i])), [allItems]);
+  const numbers = useMemo(() => outlineNumbers(allItems), [allItems]);
   const childCount = useMemo(() => {
     const m = new Map<string, number>();
     for (const i of allItems) {
@@ -42,9 +47,35 @@ export function DependencyEditor({ workItem, allItems, dependencies, canEdit, on
   const predecessors = dependencies.filter((d) => d.successor_id === workItem.id);
   const successors = dependencies.filter((d) => d.predecessor_id === workItem.id);
 
-  const candidates = allItems.filter(
-    (i) => i.id !== workItem.id && !childCount.get(i.id),
+  const candidates = useMemo(
+    () => allItems.filter((i) => i.id !== workItem.id && !childCount.get(i.id)),
+    [allItems, workItem.id, childCount],
   );
+
+  // Tree-order rows for the picker: include non-leaf ancestors of candidates as
+  // disabled header rows so the hierarchy reads correctly.
+  const pickerRows = useMemo(() => {
+    const candidateIds = new Set(candidates.map((c) => c.id));
+    const byId = new Map(allItems.map((i) => [i.id, i] as const));
+    const include = new Set<string>(candidateIds);
+    for (const id of candidateIds) {
+      let cur = byId.get(id);
+      while (cur?.parent_id) {
+        include.add(cur.parent_id);
+        cur = byId.get(cur.parent_id);
+      }
+    }
+    const items = allItems.filter((i) => include.has(i.id) && !i.deleted_at);
+    function cmp(a: WorkItem, b: WorkItem): number {
+      const an = (numbers.get(a.id) ?? '').split('.').map(Number);
+      const bn = (numbers.get(b.id) ?? '').split('.').map(Number);
+      const n = Math.min(an.length, bn.length);
+      for (let i = 0; i < n; i++) if (an[i] !== bn[i]) return an[i] - bn[i];
+      return an.length - bn.length;
+    }
+    items.sort(cmp);
+    return items.map((i) => ({ item: i, selectable: candidateIds.has(i.id) }));
+  }, [allItems, candidates, numbers]);
 
   const canHaveDeps = !childCount.get(workItem.id);
 
@@ -78,6 +109,7 @@ export function DependencyEditor({ workItem, allItems, dependencies, canEdit, on
         rows={predecessors}
         otherKey="predecessor_id"
         itemMap={itemMap}
+        numbers={numbers}
         canEdit={canEdit}
         onNavigate={onNavigate}
         onDelete={(d) => del.mutate({ id: d.id, project_id: workItem.project_id })}
@@ -89,6 +121,7 @@ export function DependencyEditor({ workItem, allItems, dependencies, canEdit, on
         rows={successors}
         otherKey="successor_id"
         itemMap={itemMap}
+        numbers={numbers}
         canEdit={canEdit}
         onNavigate={onNavigate}
         onDelete={(d) => del.mutate({ id: d.id, project_id: workItem.project_id })}
@@ -102,9 +135,9 @@ export function DependencyEditor({ workItem, allItems, dependencies, canEdit, on
           </div>
           <Select value={addId} onChange={(e) => setAddId(e.target.value)} className="w-full">
             <option value="">{t('dependencies.selectItem')}</option>
-            {candidates.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
+            {pickerRows.map(({ item: c, selectable }) => (
+              <option key={c.id} value={c.id} disabled={!selectable}>
+                {INDENT.repeat(c.level)}{numbers.get(c.id) ?? ''} · {c.name}
               </option>
             ))}
           </Select>
@@ -188,6 +221,7 @@ interface DepListProps {
   rows: Dependency[];
   otherKey: 'predecessor_id' | 'successor_id';
   itemMap: Map<string, WorkItem>;
+  numbers: Map<string, string>;
   canEdit: boolean;
   onNavigate: (id: string) => void;
   onDelete: (d: Dependency) => void;
@@ -195,7 +229,7 @@ interface DepListProps {
   onAdd: () => void;
 }
 
-function DepList({ label, rows, otherKey, itemMap, canEdit, onNavigate, onDelete, onUpdate, onAdd }: DepListProps) {
+function DepList({ label, rows, otherKey, itemMap, numbers, canEdit, onNavigate, onDelete, onUpdate, onAdd }: DepListProps) {
   const t = useT();
   return (
     <div>
@@ -217,6 +251,7 @@ function DepList({ label, rows, otherKey, itemMap, canEdit, onNavigate, onDelete
             return (
               <div key={d.id} className="flex items-center gap-1.5 text-xs">
                 <Badge kind={other.level}>L{other.level + 1}</Badge>
+                <span className="text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500 shrink-0">{numbers.get(other.id) ?? ''}</span>
                 <button onClick={() => onNavigate(other.id)} className="flex-1 text-left text-blue-600 dark:text-blue-400 hover:underline truncate">
                   {other.name}
                 </button>

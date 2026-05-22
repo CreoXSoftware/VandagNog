@@ -118,6 +118,7 @@ export function ProjectPage() {
             dependencies={dependencies}
             workingDays={project.working_days}
             nonWorkingDays={nonWorkingDays}
+            members={members}
             onSelect={selectItem}
             onCreate={createdItem}
             canEdit={canEdit}

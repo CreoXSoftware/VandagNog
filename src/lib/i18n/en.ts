@@ -223,6 +223,24 @@ export const en = {
     collapseAll: 'Collapse all',
     workItem: 'Work item',
     visibleTotal: '{visible} visible · {total} total',
+    filter: {
+      assignee: 'Assignee',
+      status: 'Status',
+      dateRange: 'Date range',
+      dateRangeHint: 'Items active in this window are shown.',
+      depth: 'Depth',
+      upTo: 'Up to {level}',
+      assignedToMe: 'Assigned to me',
+      createdByMe: 'Created by me',
+      clear: 'Clear',
+      clearAll: 'Clear all',
+      statusValue: {
+        not_started: 'Not started',
+        in_progress: 'In progress',
+        completed: 'Completed',
+        overdue: 'Overdue',
+      },
+    },
   },
 };
 
