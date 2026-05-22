@@ -1,6 +1,7 @@
 export type WorkItemLevel = number;
 export type DependencyType = 'FS' | 'FF' | 'SS' | 'SF';
 export type ProjectRole = 'owner' | 'editor' | 'viewer';
+export type TeamRole = 'owner' | 'member';
 
 export interface Project {
   id: string;
@@ -34,6 +35,32 @@ export interface ProjectInvite {
   expires_at: string;
   accepted_at: string | null;
   created_at: string;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  description: string | null;
+  invite_code: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TeamSummary extends Team {
+  my_role: TeamRole;
+  member_count: number;
+}
+
+export interface TeamMember {
+  team_id: string;
+  user_id: string;
+  role: TeamRole;
+  joined_at: string;
+  email?: string;
+  display_name?: string;
+  first_name?: string | null;
+  last_name?: string | null;
 }
 
 export interface WorkItem {

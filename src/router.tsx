@@ -15,6 +15,8 @@ import { ProjectPage } from '@/routes/project';
 import { InvitePage } from '@/routes/invite';
 import { AuthCallbackPage } from '@/routes/authCallback';
 import { ProfilePage } from '@/routes/profile';
+import { TeamsListPage } from '@/routes/teams';
+import { TeamPage } from '@/routes/team';
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -77,6 +79,25 @@ const profileRoute = createRoute({
   component: ProfilePage,
 });
 
+interface TeamsSearch {
+  join?: string;
+}
+
+const teamsListRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/teams',
+  validateSearch: (s: Record<string, unknown>): TeamsSearch => ({
+    join: typeof s.join === 'string' ? s.join : undefined,
+  }),
+  component: TeamsListPage,
+});
+
+const teamRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/teams/$teamId',
+  component: TeamPage,
+});
+
 interface ProjectSearch {
   item?: string;
   view?: 'gantt' | 'calendar' | 'members';
@@ -98,7 +119,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   authCallbackRoute,
   inviteRoute,
-  appLayoutRoute.addChildren([indexRoute, projectsListRoute, profileRoute, projectRoute]),
+  appLayoutRoute.addChildren([indexRoute, projectsListRoute, profileRoute, projectRoute, teamsListRoute, teamRoute]),
 ]);
 
 export function createAppRouter(queryClient: QueryClient) {
