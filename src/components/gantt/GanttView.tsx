@@ -170,6 +170,24 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   }, [resizing]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const leftScrollRef = useRef<HTMLDivElement>(null);
+  const syncingScrollRef = useRef(false);
+  const onLeftScroll = () => {
+    if (syncingScrollRef.current) return;
+    const r = scrollRef.current, l = leftScrollRef.current;
+    if (!r || !l) return;
+    syncingScrollRef.current = true;
+    r.scrollTop = l.scrollTop;
+    requestAnimationFrame(() => { syncingScrollRef.current = false; });
+  };
+  const onRightScroll = () => {
+    if (syncingScrollRef.current) return;
+    const r = scrollRef.current, l = leftScrollRef.current;
+    if (!r || !l) return;
+    syncingScrollRef.current = true;
+    l.scrollTop = r.scrollTop;
+    requestAnimationFrame(() => { syncingScrollRef.current = false; });
+  };
   const today = startOfDay(new Date());
 
   const ZOOM_MIN = 6;
@@ -683,7 +701,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
               />
             </div>
           )}
-          <div className="flex-1 overflow-y-auto">
+          <div ref={leftScrollRef} onScroll={onLeftScroll} className="flex-1 overflow-y-auto">
             {flatRows.length === 0 && (
               <div className="m-3 text-xs text-neutral-500 dark:text-neutral-400 py-8 text-center border border-dashed border-neutral-300 dark:border-neutral-700 rounded">
                 {t('workItem.noItems')} {canEdit && t('workItem.addRootToStart')}
@@ -775,7 +793,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
         </div>
 
         {/* Timeline column (right, scrollable) */}
-        <div ref={scrollRef} className="flex-1 overflow-auto relative">
+        <div ref={scrollRef} onScroll={onRightScroll} className="flex-1 overflow-auto relative">
           <div className="relative" style={{ width: totalWidth, height: totalHeight }}>
             {/* Header: month + day strip */}
             <TimelineHeader viewStart={viewStart} days={effectiveDays} dayWidth={dayWidth} todayX={todayX} calendar={calendar} locale={locale} />
