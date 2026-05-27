@@ -103,6 +103,7 @@ export function WorkingDayPicker({
           <Popover.Content
             align="end"
             sideOffset={4}
+            data-keep-drawer
             className="z-50 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg p-2"
           >
             <DayPicker

@@ -19,6 +19,78 @@ interface ComputeArgs {
 
 const MAX_PASSES = 5000;
 
+// Position a successor relative to one predecessor for a given dependency type.
+// Duration (in working days) is held fixed; start- or end-driven per type.
+function positionFromDep(
+  type: DependencyType,
+  lagDays: number,
+  predStart: Date,
+  predEnd: Date,
+  workDayDur: number,
+  calendar: WorkCalendar,
+): { nextStart: Date; nextEnd: Date } {
+  switch (type) {
+    case 'FS': {
+      const nextStart = addWorkingDays(predEnd, lagDays + 1, calendar);
+      return { nextStart, nextEnd: addWorkingDays(nextStart, workDayDur, calendar) };
+    }
+    case 'FF': {
+      const nextEnd = addWorkingDays(predEnd, lagDays, calendar);
+      return { nextStart: addWorkingDays(nextEnd, -workDayDur, calendar), nextEnd };
+    }
+    case 'SS': {
+      const nextStart = addWorkingDays(predStart, lagDays, calendar);
+      return { nextStart, nextEnd: addWorkingDays(nextStart, workDayDur, calendar) };
+    }
+    case 'SF': {
+      const nextEnd = addWorkingDays(predStart, lagDays, calendar);
+      return { nextStart: addWorkingDays(nextEnd, -workDayDur, calendar), nextEnd };
+    }
+  }
+}
+
+function workingDuration(item: WorkItem, calendar: WorkCalendar): number {
+  const s = parseDate(item.start_date);
+  const e = parseDate(item.end_date);
+  if (s && e) return Math.max(countWorkingDays(s, e, calendar) - 1, 0);
+  if (item.duration_days != null) return Math.max(item.duration_days - 1, 0);
+  return 0;
+}
+
+// Binding (ASAP) position of a successor across ALL its predecessors: the latest
+// required start wins. A non-gating predecessor (earlier) has no effect. Returns
+// null if the successor has no predecessor with dates.
+export function computeSuccessorPosition({
+  successorId,
+  items,
+  dependencies,
+  calendar,
+}: {
+  successorId: string;
+  items: WorkItem[];
+  dependencies: Dependency[];
+  calendar: WorkCalendar;
+}): { newStart: string; newEnd: string } | null {
+  const itemMap = new Map(items.map((i) => [i.id, i]));
+  const succ = itemMap.get(successorId);
+  if (!succ) return null;
+  const workDayDur = workingDuration(succ, calendar);
+
+  let best: { nextStart: Date; nextEnd: Date } | null = null;
+  for (const dep of dependencies) {
+    if (dep.successor_id !== successorId) continue;
+    const pred = itemMap.get(dep.predecessor_id);
+    if (!pred) continue;
+    const predStart = parseDate(pred.start_date);
+    const predEnd = parseDate(pred.end_date);
+    if (!predStart || !predEnd) continue;
+    const pos = positionFromDep(dep.type, dep.lag_days, predStart, predEnd, workDayDur, calendar);
+    if (!best || pos.nextStart.getTime() > best.nextStart.getTime()) best = pos;
+  }
+  if (!best) return null;
+  return { newStart: toDateString(best.nextStart), newEnd: toDateString(best.nextEnd) };
+}
+
 export function computeCascade({
   rootId,
   newStart,
@@ -31,10 +103,14 @@ export function computeCascade({
   if (!itemMap.has(rootId)) return { patches: new Map(), error: 'Work item not found' };
 
   const outgoing = new Map<string, Dependency[]>();
+  const incoming = new Map<string, Dependency[]>();
   for (const d of dependencies) {
-    const arr = outgoing.get(d.predecessor_id) ?? [];
-    arr.push(d);
-    outgoing.set(d.predecessor_id, arr);
+    const out = outgoing.get(d.predecessor_id) ?? [];
+    out.push(d);
+    outgoing.set(d.predecessor_id, out);
+    const inc = incoming.get(d.successor_id) ?? [];
+    inc.push(d);
+    incoming.set(d.successor_id, inc);
   }
 
   const byParent = new Map<string, string[]>();
@@ -122,111 +198,68 @@ export function computeCascade({
       return { patches: new Map(), error: 'Cascade did not converge' };
     }
     const predId = queue.shift()!;
-    const pred = effective.get(predId)!;
     const edges = outgoing.get(predId) ?? [];
 
-    for (const dep of edges) {
-      const succ = effective.get(dep.successor_id);
+    // Recompute each affected successor from ALL its predecessors, not just
+    // the edge that fired. The binding constraint is the latest required
+    // start (ASAP): a successor waits for the latest of its predecessors.
+    const recomputed = new Set<string>();
+    for (const edge of edges) {
+      const succId = edge.successor_id;
+      if (recomputed.has(succId)) continue;
+      recomputed.add(succId);
+
+      const succ = effective.get(succId);
       if (!succ) continue;
-      if (dep.successor_id === rootId) {
+      if (succId === rootId) {
         return { patches: new Map(), error: 'Dependency cycle detected' };
       }
 
-      const predStart = parseDate(pred.start_date);
-      const predEnd = parseDate(pred.end_date);
-      if (!predStart || !predEnd) continue;
+      let best: { targetId: string; nextStart: Date; nextEnd: Date } | null = null;
+      for (const dep of incoming.get(succId) ?? []) {
+        const pred = effective.get(dep.predecessor_id);
+        if (!pred) continue;
+        const predStart = parseDate(pred.start_date);
+        const predEnd = parseDate(pred.end_date);
+        if (!predStart || !predEnd) continue;
 
-      let targetId = succ.id;
-      if (!isLeaf(succ.id)) {
-        const gating = gatingChildFor(succ.id, dep.type, 'succ');
-        if (!gating) continue;
-        targetId = gating;
+        let targetId = succ.id;
+        if (!isLeaf(succ.id)) {
+          const gating = gatingChildFor(succ.id, dep.type, 'succ');
+          if (!gating) continue;
+          targetId = gating;
+        }
+
+        const target = effective.get(targetId)!;
+        const workDayDur = workingDuration(target, calendar);
+        const { nextStart, nextEnd } = positionFromDep(
+          dep.type,
+          dep.lag_days,
+          predStart,
+          predEnd,
+          workDayDur,
+          calendar,
+        );
+
+        if (!best || nextStart.getTime() > best.nextStart.getTime()) {
+          best = { targetId, nextStart, nextEnd };
+        }
       }
 
-      const target = effective.get(targetId)!;
-      const tStart = parseDate(target.start_date);
-      const tEnd = parseDate(target.end_date);
-      const workDayDur = tStart && tEnd
-        ? Math.max(countWorkingDays(tStart, tEnd, calendar) - 1, 0)
-        : target.duration_days != null
-          ? Math.max(target.duration_days - 1, 0)
-          : 0;
-
-      let nextStart: Date;
-      let nextEnd: Date;
-      switch (dep.type) {
-        case 'FS':
-          nextStart = addWorkingDays(predEnd, dep.lag_days + 1, calendar);
-          nextEnd = addWorkingDays(nextStart, workDayDur, calendar);
-          break;
-        case 'FF':
-          nextEnd = addWorkingDays(predEnd, dep.lag_days, calendar);
-          nextStart = addWorkingDays(nextEnd, -workDayDur, calendar);
-          break;
-        case 'SS':
-          nextStart = addWorkingDays(predStart, dep.lag_days, calendar);
-          nextEnd = addWorkingDays(nextStart, workDayDur, calendar);
-          break;
-        case 'SF':
-          nextEnd = addWorkingDays(predStart, dep.lag_days, calendar);
-          nextStart = addWorkingDays(nextEnd, -workDayDur, calendar);
-          break;
-      }
-
-      const changed = applyPatch(targetId, {
-        start_date: toDateString(nextStart),
-        end_date: toDateString(nextEnd),
+      if (!best) continue;
+      const changed = applyPatch(best.targetId, {
+        start_date: toDateString(best.nextStart),
+        end_date: toDateString(best.nextEnd),
         duration_days: null,
       });
       if (changed) {
-        queue.push(targetId);
-        propagateUpward(targetId, queue);
+        queue.push(best.targetId);
+        propagateUpward(best.targetId, queue);
       }
     }
   }
 
   return { patches, error: null };
-}
-
-export function computeSuccessorPositionFromDep(
-  dep: Dependency,
-  pred: WorkItem,
-  succ: WorkItem,
-  calendar: WorkCalendar,
-): { newStart: string; newEnd: string } | null {
-  const predStart = parseDate(pred.start_date);
-  const predEnd = parseDate(pred.end_date);
-  if (!predStart || !predEnd) return null;
-
-  const succStartCur = parseDate(succ.start_date);
-  const succEndCur = parseDate(succ.end_date);
-  const workDayDur = succStartCur && succEndCur
-    ? Math.max(countWorkingDays(succStartCur, succEndCur, calendar) - 1, 0)
-    : succ.duration_days != null
-      ? Math.max(succ.duration_days - 1, 0)
-      : 0;
-
-  let nextStart: Date;
-  let nextEnd: Date;
-  switch (dep.type) {
-    case 'FS':
-      nextStart = addWorkingDays(predEnd, dep.lag_days + 1, calendar);
-      nextEnd = addWorkingDays(nextStart, workDayDur, calendar);
-      break;
-    case 'FF':
-      nextEnd = addWorkingDays(predEnd, dep.lag_days, calendar);
-      nextStart = addWorkingDays(nextEnd, -workDayDur, calendar);
-      break;
-    case 'SS':
-      nextStart = addWorkingDays(predStart, dep.lag_days, calendar);
-      nextEnd = addWorkingDays(nextStart, workDayDur, calendar);
-      break;
-    case 'SF':
-      nextEnd = addWorkingDays(predStart, dep.lag_days, calendar);
-      nextStart = addWorkingDays(nextEnd, -workDayDur, calendar);
-      break;
-  }
-  return { newStart: toDateString(nextStart), newEnd: toDateString(nextEnd) };
 }
 
 export interface LagUpdate {

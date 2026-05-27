@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import type { Dependency, DependencyType, NonWorkingDay, Project, WorkItem } from '@/types/db';
-import { computeCascade, computeSuccessorPositionFromDep } from '@/lib/cascade';
+import { computeCascade, computeSuccessorPosition } from '@/lib/cascade';
 import { buildCalendar } from '@/components/gantt/ganttUtils';
 import { markLocalWorkItemMutation } from '@/lib/localMutationGuard';
 import { workItemsKey } from './useWorkItems';
@@ -75,7 +75,15 @@ export function useCreateDependency() {
         type: input.type,
         lag_days: input.lag_days,
       } as Dependency;
-      const pos = computeSuccessorPositionFromDep(provisionalDep, pred, succ, calendar);
+      // Bind across ALL of the successor's predecessors (incl. the new one):
+      // a later-ending existing predecessor keeps gating, so adding an earlier
+      // predecessor must not pull the successor back.
+      const pos = computeSuccessorPosition({
+        successorId: succ.id,
+        items: prev,
+        dependencies: [...prevDeps, provisionalDep],
+        calendar,
+      });
       if (pos && (pos.newStart !== succ.start_date || pos.newEnd !== succ.end_date)) {
         const result = computeCascade({
           rootId: succ.id,
@@ -156,14 +164,22 @@ export function useUpdateDependency() {
         const project = qc.getQueryData<Project>(projectKey(input.project_id));
         const nonWorking = qc.getQueryData<NonWorkingDay[]>(nonWorkingDaysKey(input.project_id)) ?? [];
         const calendar = buildCalendar(project?.working_days ?? [1, 2, 3, 4, 5], nonWorking);
-        const pos = computeSuccessorPositionFromDep(updatedDep, pred, succ, calendar);
+        const mergedDeps = prevDeps.map((d) => (d.id === input.id ? updatedDep : d));
+        // Bind across ALL predecessors: an edit to one dep only moves the
+        // successor if that dep is (or becomes) the gating one.
+        const pos = computeSuccessorPosition({
+          successorId: succ.id,
+          items: prev,
+          dependencies: mergedDeps,
+          calendar,
+        });
         if (pos && (pos.newStart !== succ.start_date || pos.newEnd !== succ.end_date)) {
           const result = computeCascade({
             rootId: succ.id,
             newStart: pos.newStart,
             newEnd: pos.newEnd,
             items: prev,
-            dependencies: prevDeps,
+            dependencies: mergedDeps,
             calendar,
           });
           qc.setQueryData<WorkItem[]>(

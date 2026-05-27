@@ -13,14 +13,28 @@ interface DrawerProps {
 
 export function Drawer({ open, onClose, title, children, widthClass = 'w-[480px]' }: DrawerProps) {
   const t = useT();
+  const asideRef = React.useRef<HTMLElement>(null);
 
   React.useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      // keep open when interacting with the drawer itself, the work-item
+      // widget rows, or the gantt bars (so editing/dragging keeps detail visible)
+      if (asideRef.current?.contains(target)) return;
+      if (target.closest('[data-keep-drawer],[data-sonner-toaster]')) return;
+      onClose();
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('pointerdown', onPointerDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('pointerdown', onPointerDown, true);
+    };
   }, [open, onClose]);
 
   if (!open) return null;
@@ -28,6 +42,7 @@ export function Drawer({ open, onClose, title, children, widthClass = 'w-[480px]
   return (
     <div className="fixed inset-y-0 right-0 z-50 pointer-events-none">
       <aside
+        ref={asideRef}
         className={cn(
           'pointer-events-auto h-full bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100',
           'border-l border-neutral-200 dark:border-neutral-800 shadow-xl flex flex-col',

@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import type { Dependency, NonWorkingDay, WorkItem } from '@/types/db';
 import { useCreateWorkItem, useDeleteWorkItem, useReorderWorkItems, useRescheduleFrom, type ReorderUpdate } from '@/hooks/useWorkItems';
 import { cn } from '@/lib/utils';
+import { computeSuccessorPosition } from '@/lib/cascade';
 import {
   DAY_WIDTH,
   ROW_HEIGHT,
@@ -293,6 +294,14 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   // Drag handlers (bar move/resize)
   useEffect(() => {
     if (!drag) return;
+    // Earliest start allowed by this item's gating predecessor (null = none).
+    const pos = computeSuccessorPosition({
+      successorId: drag.id,
+      items: workItems,
+      dependencies,
+      calendar,
+    });
+    const earliest = pos ? parseDate(pos.newStart) : null;
     function onMove(e: PointerEvent) {
       const curIdx = clientXToIndex(e.clientX);
       const startIdx = clientXToIndex(drag!.startX);
@@ -313,6 +322,17 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
       } else if (drag!.mode === 'resize-right') {
         ne = snapBackward(addDays(drag!.origEnd, deltaDays), calendar);
         if (ne < drag!.origStart) ne = drag!.origStart;
+      }
+      // Can't pull start before the gating (latest-ending) predecessor. Clamp:
+      // move shifts the whole bar; resize-left just pins the start.
+      if (earliest && ns < earliest) {
+        if (drag!.mode === 'move') {
+          const dur = Math.max(countWorkingDays(drag!.origStart, drag!.origEnd, calendar) - 1, 0);
+          ns = earliest;
+          ne = addWorkingDays(earliest, dur, calendar);
+        } else if (drag!.mode === 'resize-left') {
+          ns = earliest;
+        }
       }
       setDrag({ ...drag!, previewStart: ns, previewEnd: ne });
     }
@@ -339,7 +359,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [drag, projectId, reschedule, calendar]);
+  }, [drag, projectId, reschedule, calendar, workItems, dependencies]);
 
   function clientXToIndex(clientX: number): number | null {
     const el = scrollRef.current;
@@ -818,6 +838,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
               return (
                 <div
                   key={r.item.id}
+                  data-keep-drawer
                   onClick={() => onSelect(r.item.id)}
                   draggable={rowDraggable}
                   onDragStart={rowDraggable ? (e) => onRowDragStart(e, r.item.id) : undefined}
@@ -969,6 +990,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <div
+                            data-keep-drawer
                             className={cn(
                               'absolute top-1 rounded text-[10px] text-white flex items-center justify-center select-none',
                               isRollup ? 'bg-neutral-700 dark:bg-neutral-600 cursor-default' : `${style.bar} cursor-move`,
