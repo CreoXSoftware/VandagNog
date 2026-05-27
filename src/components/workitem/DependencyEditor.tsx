@@ -233,7 +233,24 @@ function DepList({ label, rows, otherKey, itemMap, numbers, canEdit, onNavigate,
         <div className="space-y-1">
           {rows.map((d) => {
             const other = itemMap.get(d[otherKey]);
-            if (!other) return null;
+            if (!other) {
+              return (
+                <div key={d.id} className="flex items-center gap-1.5 text-xs">
+                  <span className="flex-1 text-[11px] italic text-neutral-400 dark:text-neutral-500 truncate">
+                    {t('dependencies.deletedItem')}
+                  </span>
+                  {canEdit && (
+                    <button
+                      onClick={() => onDelete(d)}
+                      className="p-0.5 text-neutral-400 dark:text-neutral-500 hover:text-red-600 dark:hover:text-red-400"
+                      title={t('common.remove')}
+                    >
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+              );
+            }
             return (
               <div key={d.id} className="flex items-center gap-1.5 text-xs">
                 <Badge kind={other.level}>L{other.level + 1}</Badge>

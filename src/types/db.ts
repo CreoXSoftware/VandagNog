@@ -106,6 +106,7 @@ export interface WorkItem {
   deliverable: string | null;
   start_date: string | null;
   end_date: string | null;
+  duration_days: number | null;
   progress: number;
   assignee_id: string | null;
   position: number;

@@ -1,7 +1,7 @@
 import { addWorkingDays, countWorkingDays, diffDays, parseDate, toDateString, workingDayHops, type WorkCalendar } from '@/components/gantt/ganttUtils';
 import type { Dependency, DependencyType, WorkItem } from '@/types/db';
 
-export type WorkItemPatch = Partial<Pick<WorkItem, 'start_date' | 'end_date' | 'progress'>>;
+export type WorkItemPatch = Partial<Pick<WorkItem, 'start_date' | 'end_date' | 'progress' | 'duration_days'>>;
 
 export interface CascadeResult {
   patches: Map<string, WorkItemPatch>;
@@ -58,7 +58,8 @@ export function computeCascade({
     if (
       next.start_date === cur.start_date &&
       next.end_date === cur.end_date &&
-      next.progress === cur.progress
+      next.progress === cur.progress &&
+      next.duration_days === cur.duration_days
     ) {
       return false;
     }
@@ -110,7 +111,7 @@ export function computeCascade({
   }
 
   // Initial root patch
-  applyPatch(rootId, { start_date: newStart, end_date: newEnd });
+  applyPatch(rootId, { start_date: newStart, end_date: newEnd, duration_days: null });
 
   const queue: string[] = [rootId];
   propagateUpward(rootId, queue);
@@ -147,7 +148,9 @@ export function computeCascade({
       const tEnd = parseDate(target.end_date);
       const workDayDur = tStart && tEnd
         ? Math.max(countWorkingDays(tStart, tEnd, calendar) - 1, 0)
-        : 0;
+        : target.duration_days != null
+          ? Math.max(target.duration_days - 1, 0)
+          : 0;
 
       let nextStart: Date;
       let nextEnd: Date;
@@ -173,6 +176,7 @@ export function computeCascade({
       const changed = applyPatch(targetId, {
         start_date: toDateString(nextStart),
         end_date: toDateString(nextEnd),
+        duration_days: null,
       });
       if (changed) {
         queue.push(targetId);
@@ -198,7 +202,9 @@ export function computeSuccessorPositionFromDep(
   const succEndCur = parseDate(succ.end_date);
   const workDayDur = succStartCur && succEndCur
     ? Math.max(countWorkingDays(succStartCur, succEndCur, calendar) - 1, 0)
-    : 0;
+    : succ.duration_days != null
+      ? Math.max(succ.duration_days - 1, 0)
+      : 0;
 
   let nextStart: Date;
   let nextEnd: Date;

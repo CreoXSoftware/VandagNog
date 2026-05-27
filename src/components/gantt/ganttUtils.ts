@@ -91,6 +91,82 @@ export function formatWorkDuration(workDays: number): string {
   return `${workDays}d`;
 }
 
+// Variable-width day axis: working days get full `dayWidth`, non-working days are
+// compressed to `offWidth` so weekends/holidays take minimal horizontal space.
+export interface DayAxis {
+  total: number;
+  days: number;
+  dayWidth: number;
+  offWidth: number;
+  xOf: (dayIndex: number) => number;
+  widthOf: (dayIndex: number) => number;
+  indexAtX: (px: number) => number;
+}
+
+export function buildDayAxis(
+  viewStart: Date,
+  days: number,
+  dayWidth: number,
+  offWidth: number,
+  cal: WorkCalendar,
+): DayAxis {
+  const offsets = new Float64Array(days + 1);
+  const widths = new Float64Array(days);
+  let acc = 0;
+  for (let i = 0; i < days; i++) {
+    offsets[i] = acc;
+    const w = isWorkingDay(addDays(viewStart, i), cal) ? dayWidth : offWidth;
+    widths[i] = w;
+    acc += w;
+  }
+  offsets[days] = acc;
+  return {
+    total: acc,
+    days,
+    dayWidth,
+    offWidth,
+    // Days outside [0, days) fall back to full width (rarely hit; view is padded).
+    xOf: (i) => {
+      if (i <= 0) return i * dayWidth;
+      if (i >= days) return acc + (i - days) * dayWidth;
+      return offsets[i];
+    },
+    widthOf: (i) => (i >= 0 && i < days ? widths[i] : dayWidth),
+    indexAtX: (px) => {
+      if (px < 0) return Math.floor(px / dayWidth);
+      if (px >= acc) return days + Math.floor((px - acc) / dayWidth);
+      let lo = 0;
+      let hi = days;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (offsets[mid] <= px) lo = mid + 1;
+        else hi = mid;
+      }
+      return lo - 1;
+    },
+  };
+}
+
+// Snap a date forward to the nearest working day (or stay if already working).
+export function snapForward(d: Date, cal: WorkCalendar): Date {
+  let cur = d;
+  for (let i = 0; i < 366; i++) {
+    if (isWorkingDay(cur, cal)) return cur;
+    cur = addDays(cur, 1);
+  }
+  return d;
+}
+
+// Snap a date backward to the nearest working day (or stay if already working).
+export function snapBackward(d: Date, cal: WorkCalendar): Date {
+  let cur = d;
+  for (let i = 0; i < 366; i++) {
+    if (isWorkingDay(cur, cal)) return cur;
+    cur = addDays(cur, -1);
+  }
+  return d;
+}
+
 export function addWorkingDays(d: Date, n: number, cal: WorkCalendar): Date {
   if (n === 0) return d;
   const step = n > 0 ? 1 : -1;

@@ -4,7 +4,8 @@ import { Badge } from '@/components/ui/Badge';
 import { Input, Textarea } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { DisabledHint } from '@/components/ui/DisabledHint';
-import { toDateInput, formatDate } from '@/lib/utils';
+import { WorkingDayPicker } from '@/components/ui/WorkingDayPicker';
+import { formatDate } from '@/lib/utils';
 import type { Dependency, NonWorkingDay, ProjectMember, WorkItem } from '@/types/db';
 import { useUpdateWorkItem, useRescheduleFrom } from '@/hooks/useWorkItems';
 import { buildCalendar, type WorkCalendar } from '@/components/gantt/ganttUtils';
@@ -78,9 +79,34 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
     );
   }
 
-  function handleDurationChange(workDays: number) {
+  async function handleDurationChange(workDays: number) {
     if (!workItem.start_date) {
-      toast.error(t('cascade.needStartDate'));
+      try {
+        await update.mutateAsync({
+          id: workItem.id,
+          project_id: workItem.project_id,
+          patch: { duration_days: workDays },
+        });
+      } catch (e) {
+        toast.error((e as Error).message);
+        return;
+      }
+      // If predecessors exist with dates, kick cascade so this task's dates get computed.
+      const preds = dependencies
+        .filter((d) => d.successor_id === workItem.id)
+        .map((d) => allItems.find((w) => w.id === d.predecessor_id))
+        .filter((w): w is typeof workItem => !!w && !!w.start_date && !!w.end_date);
+      if (preds.length === 0) return;
+      const latest = preds.reduce((a, b) => (a.end_date! > b.end_date! ? a : b));
+      reschedule.mutate(
+        {
+          project_id: workItem.project_id,
+          work_item_id: latest.id,
+          new_start: latest.start_date!,
+          new_end: latest.end_date!,
+        },
+        { onError: (e) => toast.error((e as Error).message) },
+      );
       return;
     }
     const newEnd = endDateFromStartAndDuration(workItem.start_date, workDays, calendar);
@@ -146,19 +172,21 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
         <div className="grid grid-cols-3 gap-3">
           <Field label={t('workItem.start')}>
             <DisabledHint disabled={!canEditDates} reason={dateReason}>
-              <DateField
+              <WorkingDayPicker
                 value={workItem.start_date}
+                calendar={calendar}
                 disabled={!canEditDates}
-                onCommit={(v) => handleDateChange(v, workItem.end_date)}
+                onChange={(v) => handleDateChange(v, workItem.end_date)}
               />
             </DisabledHint>
           </Field>
           <Field label={t('workItem.end')}>
             <DisabledHint disabled={!canEditDates} reason={dateReason}>
-              <DateField
+              <WorkingDayPicker
                 value={workItem.end_date}
+                calendar={calendar}
                 disabled={!canEditDates}
-                onCommit={(v) => handleDateChange(workItem.start_date, v)}
+                onChange={(v) => handleDateChange(workItem.start_date, v)}
               />
             </DisabledHint>
           </Field>
@@ -167,6 +195,7 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
               <DurationField
                 start={workItem.start_date}
                 end={workItem.end_date}
+                durationDays={workItem.duration_days}
                 calendar={calendar}
                 disabled={!canEditDates}
                 onCommit={handleDurationChange}
@@ -285,18 +314,20 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
 function DurationField({
   start,
   end,
+  durationDays,
   calendar,
   disabled,
   onCommit,
 }: {
   start: string | null;
   end: string | null;
+  durationDays: number | null;
   calendar: WorkCalendar;
   disabled: boolean;
   onCommit: (workDays: number) => void;
 }) {
   const t = useT();
-  const display = workItemDurationLabel(start, end, calendar);
+  const display = workItemDurationLabel(start, end, calendar, durationDays);
   const [v, setV] = useState(display);
   useEffect(() => setV(display), [display]);
 
@@ -317,56 +348,6 @@ function DurationField({
   return (
     <Input
       value={v}
-      disabled={disabled || !start || !end}
-      onChange={(e) => setV(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-        if (e.key === 'Escape') {
-          setV(display);
-          (e.target as HTMLInputElement).blur();
-        }
-      }}
-      placeholder={t('workItem.durationPlaceholder')}
-    />
-  );
-}
-
-function DateField({
-  value,
-  disabled,
-  onCommit,
-}: {
-  value: string | null;
-  disabled: boolean;
-  onCommit: (v: string | null) => void;
-}) {
-  const display = toDateInput(value);
-  const [v, setV] = useState(display);
-  useEffect(() => setV(display), [display]);
-
-  function commit() {
-    if (v === display) return;
-    if (v === '') {
-      onCommit(null);
-      return;
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) {
-      setV(display);
-      return;
-    }
-    const d = new Date(v + 'T00:00:00');
-    if (isNaN(d.getTime())) {
-      setV(display);
-      return;
-    }
-    onCommit(v);
-  }
-
-  return (
-    <Input
-      type="date"
-      value={v}
       disabled={disabled}
       onChange={(e) => setV(e.target.value)}
       onBlur={commit}
@@ -377,6 +358,7 @@ function DateField({
           (e.target as HTMLInputElement).blur();
         }
       }}
+      placeholder={t('workItem.durationPlaceholder')}
     />
   );
 }

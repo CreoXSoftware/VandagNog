@@ -37,6 +37,7 @@ export interface CreateWorkItemInput {
   deliverable?: string | null;
   start_date?: string | null;
   end_date?: string | null;
+  duration_days?: number | null;
   progress?: number;
   position?: number;
 }
@@ -58,6 +59,7 @@ export function useCreateWorkItem() {
           deliverable: input.deliverable ?? null,
           start_date: input.start_date ?? null,
           end_date: input.end_date ?? null,
+          duration_days: input.duration_days ?? null,
           progress: input.progress ?? 0,
           position: input.position ?? 0,
           created_by: userId,

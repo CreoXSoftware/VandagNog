@@ -1,5 +1,5 @@
 import type { DependencyType } from '@/types/db';
-import type { WorkCalendar } from '@/components/gantt/ganttUtils';
+import { parseDate, snapBackward, snapForward, toDateString, type WorkCalendar } from '@/components/gantt/ganttUtils';
 import { endDateFromStartAndDuration } from '@/lib/duration';
 
 const DEP_TYPES: ReadonlySet<DependencyType> = new Set(['FS', 'FF', 'SS', 'SF'] as const);
@@ -319,6 +319,7 @@ export interface ImportArgs {
     deliverable?: string | null;
     start_date?: string | null;
     end_date?: string | null;
+    duration_days?: number | null;
     progress?: number;
     position?: number;
   }) => Promise<{ id: string }>;
@@ -336,9 +337,22 @@ export async function importTaskTree(args: ImportArgs): Promise<{ tasks: number;
   const idMap = new Map<string, string>();
 
   for (const t of flat) {
+    let start = t.start_date;
+    if (start) {
+      const d = parseDate(start);
+      if (d) start = toDateString(snapForward(d, calendar));
+    }
     let end = t.end_date;
-    if (!end && t.start_date && t.duration_days) {
-      end = endDateFromStartAndDuration(t.start_date, t.duration_days, calendar);
+    if (end) {
+      const d = parseDate(end);
+      if (d) end = toDateString(snapBackward(d, calendar));
+    }
+    if (start && end && end < start) end = start;
+    let dur: number | null = null;
+    if (!end && start && t.duration_days) {
+      end = endDateFromStartAndDuration(start, t.duration_days, calendar);
+    } else if (!start && !end && t.duration_days) {
+      dur = t.duration_days;
     }
     const parent_id = t.parentTempId ? (idMap.get(t.parentTempId) ?? null) : null;
     const created = await createWorkItem({
@@ -347,8 +361,9 @@ export async function importTaskTree(args: ImportArgs): Promise<{ tasks: number;
       name: t.name,
       description: t.description,
       deliverable: t.deliverable,
-      start_date: t.start_date,
+      start_date: start,
       end_date: end,
+      duration_days: dur,
       progress: t.progress,
       position: t.position,
     });

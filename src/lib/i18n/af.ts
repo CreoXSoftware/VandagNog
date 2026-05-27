@@ -156,6 +156,7 @@ export const af: Dict = {
     addSuccessor: 'Voeg opvolger by',
     selectItem: 'Kies item…',
     lagPlaceholder: 'Vertraging (dae)',
+    deletedItem: '(verwyderde item)',
   },
   comments: {
     none: 'Nog geen kommentaar nie',

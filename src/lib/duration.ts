@@ -18,11 +18,13 @@ export function workItemDurationLabel(
   start: string | null,
   end: string | null,
   calendar: WorkCalendar,
+  durationDays?: number | null,
 ): string {
   const s = parseDate(start);
   const e = parseDate(end);
-  if (!s || !e) return '';
-  return formatDurationWorkDays(countWorkingDays(s, e, calendar));
+  if (s && e) return formatDurationWorkDays(countWorkingDays(s, e, calendar));
+  if (durationDays != null && durationDays > 0) return formatDurationWorkDays(durationDays);
+  return '';
 }
 
 export function endDateFromStartAndDuration(

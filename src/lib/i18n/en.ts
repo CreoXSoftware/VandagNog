@@ -154,6 +154,7 @@ export const en = {
     addSuccessor: 'Add successor',
     selectItem: 'Select item…',
     lagPlaceholder: 'Lag (days)',
+    deletedItem: '(deleted item)',
   },
   comments: {
     none: 'No comments yet',

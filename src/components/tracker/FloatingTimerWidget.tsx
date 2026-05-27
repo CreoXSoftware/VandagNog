@@ -188,15 +188,16 @@ export function FloatingTimerWidget() {
           ].join(' ')}
           style={{ left: pos.x, top: pos.y }}
         >
-          <div
-            onPointerDown={onDragStart}
-            onPointerMove={onDragMove}
-            onPointerUp={onDragEnd}
-            className="h-8 w-5 flex items-center justify-center text-neutral-400 cursor-grab active:cursor-grabbing"
-            title={t('tracker.liveTimer')}
+          <button
+            type="button"
+            data-no-drag
+            onClick={() => setCollapsed(true)}
+            aria-label={t('tracker.widgetCollapse')}
+            title={t('tracker.widgetCollapse')}
+            className="h-8 w-8 rounded-full text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center justify-center shrink-0"
           >
-            <GripVertical size={14} />
-          </div>
+            <Minus size={14} />
+          </button>
 
           <button
             type="button"
@@ -237,16 +238,15 @@ export function FloatingTimerWidget() {
             {running ? <Square size={14} /> : <Play size={14} />}
           </button>
 
-          <button
-            type="button"
-            data-no-drag
-            onClick={() => setCollapsed(true)}
-            aria-label={t('tracker.widgetCollapse')}
-            title={t('tracker.widgetCollapse')}
-            className="h-8 w-6 rounded text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center justify-center"
+          <div
+            onPointerDown={onDragStart}
+            onPointerMove={onDragMove}
+            onPointerUp={onDragEnd}
+            className="h-8 w-5 flex items-center justify-center text-neutral-400 cursor-grab active:cursor-grabbing"
+            title={t('tracker.liveTimer')}
           >
-            <Minus size={12} />
-          </button>
+            <GripVertical size={14} />
+          </div>
         </div>
       )}
 

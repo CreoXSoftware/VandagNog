@@ -1,4 +1,4 @@
-import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
+import { useMemo, useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { ChevronDown, ChevronRight, ZoomIn, ZoomOut, Plus, Trash2, ListPlus, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Dependency, NonWorkingDay, WorkItem } from '@/types/db';
@@ -10,13 +10,18 @@ import {
   HEADER_HEIGHT,
   TREE_WIDTH,
   addDays,
+  addWorkingDays,
   buildCalendar,
+  buildDayAxis,
+  type DayAxis,
   computeRange,
   countWorkingDays,
   diffDays,
   formatWorkDuration,
   isWorkingDay,
   parseDate,
+  snapBackward,
+  workingDayHops,
   startOfDay,
   toDateString,
 } from './ganttUtils';
@@ -190,8 +195,8 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   };
   const today = startOfDay(new Date());
 
-  const ZOOM_MIN = 6;
-  const ZOOM_MAX = 80;
+  const ZOOM_MIN = 2;
+  const ZOOM_MAX = 280;
   const [dayWidth, setDayWidth] = useState(DAY_WIDTH);
   const dayWidthRef = useRef(dayWidth);
   useEffect(() => { dayWidthRef.current = dayWidth; }, [dayWidth]);
@@ -213,12 +218,25 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   const baseDays = range.days + PAD_DAYS_LEFT + PAD_DAYS_RIGHT;
   const effectiveDays = Math.max(baseDays, Math.ceil(viewportWidth / dayWidth));
 
+  // Compressed off-day width: weekends/holidays take minimal horizontal space.
+  const offWidth = Math.max(4, Math.round(dayWidth * 0.22));
+  const axis = useMemo(
+    () => buildDayAxis(viewStart, effectiveDays, dayWidth, offWidth, calendar),
+    [viewStart, effectiveDays, dayWidth, offWidth, calendar],
+  );
+  const axisRef = useRef(axis);
+  useEffect(() => { axisRef.current = axis; }, [axis]);
+
   // Center on today initially
   useEffect(() => {
     if (!scrollRef.current) return;
-    const todayX = diffDays(today, viewStart) * dayWidth;
+    const todayX = axisRef.current.xOf(diffDays(today, viewStart));
     scrollRef.current.scrollLeft = Math.max(0, todayX - 200);
   }, [viewStart.getTime()]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Day (with sub-day fraction) to re-pin under the cursor after a zoom; applied
+  // in useLayoutEffect below so it lands before paint (no flash/clamp jump).
+  const pendingZoom = useRef<{ dayIndex: number; frac: number; ax: number } | null>(null);
 
   function zoomAt(factor: number, anchorClientX?: number) {
     const el = scrollRef.current;
@@ -228,13 +246,26 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     const cur = dayWidthRef.current;
     const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, cur * factor));
     if (next === cur) return;
-    const dayAtAnchor = (el.scrollLeft + ax) / cur;
+    // Map cursor pixel -> real day index via current (pre-zoom) axis, which is
+    // non-linear because off-days are compressed to offWidth. Use axisRef (live)
+    // since the wheel handler closes over a stale render of zoomAt.
+    const cAxis = axisRef.current;
+    const anchorPx = el.scrollLeft + ax;
+    const dayIndex = cAxis.indexAtX(anchorPx);
+    const frac = (anchorPx - cAxis.xOf(dayIndex)) / cAxis.widthOf(dayIndex);
+    pendingZoom.current = { dayIndex, frac, ax };
     setDayWidth(next);
-    requestAnimationFrame(() => {
-      if (!scrollRef.current) return;
-      scrollRef.current.scrollLeft = dayAtAnchor * next - ax;
-    });
   }
+
+  // Re-anchor after the new axis has rendered. Keyed on axis so it fires once the
+  // post-zoom layout exists; runs synchronously before paint to avoid the jump.
+  useLayoutEffect(() => {
+    const p = pendingZoom.current;
+    if (!p || !scrollRef.current) return;
+    pendingZoom.current = null;
+    const newAnchorPx = axis.xOf(p.dayIndex) + p.frac * axis.widthOf(p.dayIndex);
+    scrollRef.current.scrollLeft = newAnchorPx - p.ax;
+  }, [axis]);
 
   // Non-passive wheel listener: needed so preventDefault on ctrl/meta+wheel actually blocks browser zoom.
   useEffect(() => {
@@ -260,18 +291,24 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   useEffect(() => {
     if (!drag) return;
     function onMove(e: PointerEvent) {
-      const dx = e.clientX - drag!.startX;
-      const deltaDays = Math.round(dx / dayWidthRef.current);
+      const curIdx = clientXToIndex(e.clientX);
+      const startIdx = clientXToIndex(drag!.startX);
+      const deltaDays = curIdx != null && startIdx != null ? curIdx - startIdx : 0;
       let ns = drag!.origStart;
       let ne = drag!.origEnd;
       if (drag!.mode === 'move') {
-        ns = addDays(drag!.origStart, deltaDays);
-        ne = addDays(drag!.origEnd, deltaDays);
+        // Shift by working days so the bar jumps over weekends and keeps its work-day length.
+        const hops =
+          curIdx != null && startIdx != null
+            ? workingDayHops(addDays(viewStart, startIdx), addDays(viewStart, curIdx), calendar)
+            : 0;
+        ns = addWorkingDays(drag!.origStart, hops, calendar);
+        ne = addWorkingDays(drag!.origEnd, hops, calendar);
       } else if (drag!.mode === 'resize-left') {
-        ns = addDays(drag!.origStart, deltaDays);
+        ns = snapBackward(addDays(drag!.origStart, deltaDays), calendar);
         if (ns > drag!.origEnd) ns = drag!.origEnd;
       } else if (drag!.mode === 'resize-right') {
-        ne = addDays(drag!.origEnd, deltaDays);
+        ne = snapBackward(addDays(drag!.origEnd, deltaDays), calendar);
         if (ne < drag!.origStart) ne = drag!.origStart;
       }
       setDrag({ ...drag!, previewStart: ns, previewEnd: ne });
@@ -299,15 +336,20 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [drag, projectId, reschedule]);
+  }, [drag, projectId, reschedule, calendar]);
 
-  function clientXToDate(clientX: number): Date | null {
+  function clientXToIndex(clientX: number): number | null {
     const el = scrollRef.current;
     if (!el) return null;
     const rect = el.getBoundingClientRect();
     const x = el.scrollLeft + (clientX - rect.left);
-    const dayIdx = Math.floor(x / dayWidthRef.current);
-    return addDays(viewStart, dayIdx);
+    return axisRef.current.indexAtX(x);
+  }
+
+  function clientXToDate(clientX: number): Date | null {
+    const idx = clientXToIndex(clientX);
+    if (idx == null) return null;
+    return addDays(viewStart, idx);
   }
 
   // Create-by-drag on rows with no dates yet.
@@ -320,7 +362,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
         if (!s) return s;
         const lo = d < s.anchor ? d : s.anchor;
         const hi = d < s.anchor ? s.anchor : d;
-        return { ...s, previewStart: lo, previewEnd: hi };
+        return { ...s, previewStart: snapBackward(lo, calendar), previewEnd: snapBackward(hi, calendar) };
       });
     }
     function onUp() {
@@ -385,10 +427,38 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
 
   async function addChild(parent: WorkItem) {
     try {
+      // Parent dates/duration roll up from leaf children, so a child with null
+      // dates would blank the parent (and orphan any gantt dependency lines).
+      // Seed the new child with dates so the parent's bar is preserved.
+      const siblings = workItems.filter((w) => w.parent_id === parent.id && !w.deleted_at);
+      let start_date: string | null = null;
+      let end_date: string | null = null;
+      let duration_days: number | null = null;
+      if (siblings.length === 0) {
+        // First child: inherit the parent's span verbatim.
+        start_date = parent.start_date;
+        end_date = parent.end_date;
+        duration_days = parent.duration_days;
+      } else {
+        // Later children: start the working day after the latest sibling ends,
+        // 1-day default span (no overlap with siblings).
+        const latestEnd = siblings.reduce<string | null>(
+          (max, w) => (w.end_date && (!max || w.end_date > max) ? w.end_date : max),
+          null,
+        );
+        const e = parseDate(latestEnd);
+        if (e) {
+          start_date = toDateString(addWorkingDays(e, 1, calendar));
+          end_date = start_date;
+        }
+      }
       const r = await create.mutateAsync({
         project_id: projectId,
         parent_id: parent.id,
         name: t('workItem.newItem'),
+        start_date,
+        end_date,
+        duration_days,
       });
       setExpanded((prev) => {
         const n = new Set(prev);
@@ -583,7 +653,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     });
   }
 
-  const totalWidth = effectiveDays * dayWidth;
+  const totalWidth = axis.total;
   const totalHeight = HEADER_HEIGHT + flatRows.length * ROW_HEIGHT;
 
   function rowIndexById(id: string): number {
@@ -594,12 +664,15 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     const s = isDragging ? drag!.previewStart : parseDate(row.item.start_date);
     const en = isDragging ? drag!.previewEnd : parseDate(row.item.end_date);
     if (!s || !en) return null;
-    const x = diffDays(s, viewStart) * dayWidth;
-    const w = (diffDays(en, s) + 1) * dayWidth;
+    const si = diffDays(s, viewStart);
+    const ei = diffDays(en, viewStart);
+    const x = axis.xOf(si);
+    const w = axis.xOf(ei) + axis.widthOf(ei) - x;
     return { x, w };
   }
 
-  const todayX = diffDays(today, viewStart) * dayWidth;
+  const todayIdx = diffDays(today, viewStart);
+  const todayX = axis.xOf(todayIdx);
 
   return (
     <div className="h-full flex flex-col bg-white dark:bg-neutral-900">
@@ -796,7 +869,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
         <div ref={scrollRef} onScroll={onRightScroll} className="flex-1 overflow-auto relative">
           <div className="relative" style={{ width: totalWidth, height: totalHeight }}>
             {/* Header: month + day strip */}
-            <TimelineHeader viewStart={viewStart} days={effectiveDays} dayWidth={dayWidth} todayX={todayX} calendar={calendar} locale={locale} />
+            <TimelineHeader viewStart={viewStart} days={effectiveDays} axis={axis} todayX={todayX} calendar={calendar} locale={locale} />
 
             {/* Weekend & today background overlay */}
             <div
@@ -813,10 +886,10 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                     className={cn(
                       'absolute top-0 bottom-0',
                       isHoliday
-                        ? 'bg-amber-50 dark:bg-amber-900/20'
-                        : 'bg-neutral-50 dark:bg-neutral-800/40',
+                        ? 'bg-amber-100 dark:bg-amber-900/30'
+                        : 'bg-neutral-100 dark:bg-neutral-800/50',
                     )}
-                    style={{ left: i * dayWidth, width: dayWidth }}
+                    style={{ left: axis.xOf(i), width: axis.widthOf(i) }}
                   />
                 );
               })}
@@ -824,7 +897,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
               {todayX >= 0 && todayX <= totalWidth && (
                 <div
                   className="absolute top-0 bottom-0 border-l-2 border-red-400"
-                  style={{ left: todayX + dayWidth / 2 }}
+                  style={{ left: todayX + axis.widthOf(todayIdx) / 2 }}
                 />
               )}
             </div>
@@ -839,10 +912,12 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                 const style = levelStyle(r.item.level);
                 const creating = createDrag?.id === r.item.id;
                 const createRect = creating
-                  ? {
-                      x: diffDays(createDrag!.previewStart, viewStart) * dayWidth,
-                      w: (diffDays(createDrag!.previewEnd, createDrag!.previewStart) + 1) * dayWidth,
-                    }
+                  ? (() => {
+                      const si = diffDays(createDrag!.previewStart, viewStart);
+                      const ei = diffDays(createDrag!.previewEnd, viewStart);
+                      const x = axis.xOf(si);
+                      return { x, w: axis.xOf(ei) + axis.widthOf(ei) - x };
+                    })()
                   : null;
                 return (
                   <div
@@ -972,7 +1047,8 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   );
 }
 
-function TimelineHeader({ viewStart, days, dayWidth, todayX, calendar, locale }: { viewStart: Date; days: number; dayWidth: number; todayX: number; calendar: import('./ganttUtils').WorkCalendar; locale: string }) {
+function TimelineHeader({ viewStart, days, axis, todayX, calendar, locale }: { viewStart: Date; days: number; axis: DayAxis; todayX: number; calendar: import('./ganttUtils').WorkCalendar; locale: string }) {
+  const dayWidth = axis.dayWidth;
   const months: { label: string; x: number; width: number }[] = [];
   let curMonthKey = '';
   let curStart = 0;
@@ -983,8 +1059,8 @@ function TimelineHeader({ viewStart, days, dayWidth, todayX, calendar, locale }:
       if (curMonthKey) {
         months.push({
           label: monthLabel(addDays(viewStart, curStart), locale),
-          x: curStart * dayWidth,
-          width: (i - curStart) * dayWidth,
+          x: axis.xOf(curStart),
+          width: axis.xOf(i) - axis.xOf(curStart),
         });
       }
       curMonthKey = key;
@@ -993,8 +1069,8 @@ function TimelineHeader({ viewStart, days, dayWidth, todayX, calendar, locale }:
   }
   months.push({
     label: monthLabel(addDays(viewStart, curStart), locale),
-    x: curStart * dayWidth,
-    width: (days - curStart) * dayWidth,
+    x: axis.xOf(curStart),
+    width: axis.xOf(days) - axis.xOf(curStart),
   });
 
   const showDayNumbers = dayWidth >= 18;
@@ -1002,7 +1078,7 @@ function TimelineHeader({ viewStart, days, dayWidth, todayX, calendar, locale }:
   return (
     <div
       className="sticky top-0 z-10 bg-neutral-50 dark:bg-neutral-950 border-b border-neutral-200 dark:border-neutral-800"
-      style={{ height: HEADER_HEIGHT, width: days * dayWidth }}
+      style={{ height: HEADER_HEIGHT, width: axis.total }}
     >
       <div className="relative border-b border-neutral-200 dark:border-neutral-800" style={{ height: HEADER_HEIGHT / 2 }}>
         {months.map((m, idx) => (
@@ -1020,19 +1096,19 @@ function TimelineHeader({ viewStart, days, dayWidth, todayX, calendar, locale }:
           const d = addDays(viewStart, i);
           const offDay = !isWorkingDay(d, calendar);
           const isHoliday = calendar.nonWorking.has(toDateString(d));
-          const isToday = i * dayWidth === todayX;
+          const isToday = axis.xOf(i) === todayX;
           return (
             <div
               key={i}
               className={cn(
                 'absolute top-0 bottom-0 flex items-center justify-center text-[10px] border-r border-neutral-100 dark:border-neutral-800',
-                offDay && !isHoliday && 'text-neutral-400 dark:text-neutral-500 bg-neutral-100 dark:bg-neutral-800/60',
-                isHoliday && 'text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/40',
+                offDay && !isHoliday && 'text-neutral-400 dark:text-neutral-500',
+                isHoliday && 'text-amber-600 dark:text-amber-400',
                 isToday && 'bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400 font-semibold',
               )}
-              style={{ left: i * dayWidth, width: dayWidth }}
+              style={{ left: axis.xOf(i), width: axis.widthOf(i) }}
             >
-              {showDayNumbers ? d.getDate() : ''}
+              {showDayNumbers && !offDay ? d.getDate() : ''}
             </div>
           );
         })}
