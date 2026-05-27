@@ -75,6 +75,8 @@ interface DragState {
 const TREE_WIDTH_MIN = 220;
 const TREE_WIDTH_MAX = 720;
 const TREE_WIDTH_KEY = 'gantt.treeWidth';
+// Horizontal drag distance (px) before a row drag is treated as a level change.
+const LEVEL_DRAG_THRESHOLD = 24;
 
 export function GanttView({ projectId, workItems, dependencies, workingDays, nonWorkingDays, members, onSelect, onCreate, canEdit, selectedId }: Props) {
   const reschedule = useRescheduleFrom();
@@ -138,7 +140,8 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   const [createDrag, setCreateDrag] = useState<{ id: string; anchor: Date; previewStart: Date; previewEnd: Date } | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
   const [dragRowId, setDragRowId] = useState<string | null>(null);
-  const [overRow, setOverRow] = useState<{ id: string; pos: 'before' | 'after' | 'on' } | null>(null);
+  const [overRow, setOverRow] = useState<{ id: string; pos: 'before' | 'after' | 'on' | 'indent' | 'outdent' } | null>(null);
+  const dragStartX = useRef(0);
 
   const selectedItem = useMemo(
     () => (selectedId ? workItems.find((w) => w.id === selectedId) : undefined),
@@ -514,11 +517,27 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   function onRowDragStart(e: React.DragEvent, id: string) {
     if (!canEdit) return;
     setDragRowId(id);
+    dragStartX.current = e.clientX;
     e.dataTransfer.effectAllowed = 'move';
     try { e.dataTransfer.setData('text/plain', id); } catch { /* ignore */ }
   }
   function onRowDragOver(e: React.DragEvent, id: string) {
     if (!dragRowId) return;
+    // Dragging over the row's own position: horizontal motion = change level (indent/outdent).
+    if (id === dragRowId) {
+      const dx = e.clientX - dragStartX.current;
+      let pos: 'indent' | 'outdent' | null = null;
+      if (dx > LEVEL_DRAG_THRESHOLD) pos = 'indent';
+      else if (dx < -LEVEL_DRAG_THRESHOLD) pos = 'outdent';
+      if (!pos) {
+        if (overRow) setOverRow(null);
+        return;
+      }
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      if (!overRow || overRow.id !== id || overRow.pos !== pos) setOverRow({ id, pos });
+      return;
+    }
     if (isInvalidDropTarget(dragRowId, id)) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
@@ -543,6 +562,8 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     const over = overRow;
     clearRowDrag();
     if (!draggedId || !over) return;
+    if (over.pos === 'indent') { indentItem(draggedId); return; }
+    if (over.pos === 'outdent') { outdentItem(draggedId); return; }
     if (isInvalidDropTarget(draggedId, targetId)) return;
 
     const target = workItems.find((w) => w.id === targetId);
@@ -791,6 +812,8 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
               const dropBefore = isDropTarget && overRow!.pos === 'before';
               const dropAfter = isDropTarget && overRow!.pos === 'after';
               const dropOn = isDropTarget && overRow!.pos === 'on';
+              const dropIndent = isDropTarget && overRow!.pos === 'indent';
+              const dropOutdent = isDropTarget && overRow!.pos === 'outdent';
               const num = numbers.get(r.item.id) ?? '';
               return (
                 <div
@@ -811,8 +834,10 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                     dropBefore && 'shadow-[inset_0_2px_0_0_#3b82f6]',
                     dropAfter && 'shadow-[inset_0_-2px_0_0_#3b82f6]',
                     dropOn && 'ring-2 ring-inset ring-blue-400',
+                    dropIndent && 'shadow-[inset_3px_0_0_0_#3b82f6] ring-1 ring-inset ring-blue-400',
+                    dropOutdent && 'shadow-[inset_-3px_0_0_0_#3b82f6] ring-1 ring-inset ring-blue-400',
                   )}
-                  style={{ height: ROW_HEIGHT, paddingLeft: 8 + r.depth * 14 }}
+                  style={{ height: ROW_HEIGHT, paddingLeft: 8 + Math.max(0, r.depth + (dropIndent ? 1 : dropOutdent ? -1 : 0)) * 14 }}
                   title={canEdit ? t('workItem.dragHint') : undefined}
                 >
                   <button
