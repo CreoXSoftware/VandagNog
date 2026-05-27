@@ -4,7 +4,6 @@ import { toast } from 'sonner';
 import type { Dependency, NonWorkingDay, WorkItem } from '@/types/db';
 import { useCreateWorkItem, useDeleteWorkItem, useReorderWorkItems, useRescheduleFrom, type ReorderUpdate } from '@/hooks/useWorkItems';
 import { cn } from '@/lib/utils';
-import { computeSuccessorPosition } from '@/lib/cascade';
 import {
   DAY_WIDTH,
   ROW_HEIGHT,
@@ -149,6 +148,21 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     [selectedId, workItems],
   );
 
+  // A predecessor pins one edge of its successor, so that edge can't be dragged:
+  // FS/SS pin the start, FF/SF pin the end. Move changes both edges, so any
+  // predecessor disables it. Editing the relationship is done via the dep editor.
+  const { startLocked, endLocked, hasPred } = useMemo(() => {
+    const start = new Set<string>();
+    const end = new Set<string>();
+    const any = new Set<string>();
+    for (const d of dependencies) {
+      any.add(d.successor_id);
+      if (d.type === 'FS' || d.type === 'SS') start.add(d.successor_id);
+      else end.add(d.successor_id);
+    }
+    return { startLocked: start, endLocked: end, hasPred: any };
+  }, [dependencies]);
+
   // Resizable tree column
   const [treeWidth, setTreeWidth] = useState<number>(() => {
     const stored = typeof window !== 'undefined' ? window.localStorage.getItem(TREE_WIDTH_KEY) : null;
@@ -291,17 +305,10 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
 
-  // Drag handlers (bar move/resize)
+  // Drag handlers (bar move/resize). The edge a predecessor constrains is locked
+  // at the source (startDrag), so no clamping is needed here.
   useEffect(() => {
     if (!drag) return;
-    // Earliest start allowed by this item's gating predecessor (null = none).
-    const pos = computeSuccessorPosition({
-      successorId: drag.id,
-      items: workItems,
-      dependencies,
-      calendar,
-    });
-    const earliest = pos ? parseDate(pos.newStart) : null;
     function onMove(e: PointerEvent) {
       const curIdx = clientXToIndex(e.clientX);
       const startIdx = clientXToIndex(drag!.startX);
@@ -322,17 +329,6 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
       } else if (drag!.mode === 'resize-right') {
         ne = snapBackward(addDays(drag!.origEnd, deltaDays), calendar);
         if (ne < drag!.origStart) ne = drag!.origStart;
-      }
-      // Can't pull start before the gating (latest-ending) predecessor. Clamp:
-      // move shifts the whole bar; resize-left just pins the start.
-      if (earliest && ns < earliest) {
-        if (drag!.mode === 'move') {
-          const dur = Math.max(countWorkingDays(drag!.origStart, drag!.origEnd, calendar) - 1, 0);
-          ns = earliest;
-          ne = addWorkingDays(earliest, dur, calendar);
-        } else if (drag!.mode === 'resize-left') {
-          ns = earliest;
-        }
       }
       setDrag({ ...drag!, previewStart: ns, previewEnd: ne });
     }
@@ -359,7 +355,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [drag, projectId, reschedule, calendar, workItems, dependencies]);
+  }, [drag, projectId, reschedule, calendar]);
 
   function clientXToIndex(clientX: number): number | null {
     const el = scrollRef.current;
@@ -678,6 +674,11 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   function startDrag(e: React.PointerEvent, row: FlatRow, mode: DragMode) {
     if (!canEdit) return;
     if (row.hasChildren) return; // rollup parents are read-only
+    const id = row.item.id;
+    // A predecessor owns the pinned edge — block the drag that would move it.
+    if (mode === 'move' && hasPred.has(id)) return;
+    if (mode === 'resize-left' && startLocked.has(id)) return;
+    if (mode === 'resize-right' && endLocked.has(id)) return;
     const s = parseDate(row.item.start_date);
     const en = parseDate(row.item.end_date);
     if (!s || !en) return;
@@ -953,6 +954,9 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
               {flatRows.map((r) => {
                 const rect = barRect(r);
                 const isRollup = r.hasChildren;
+                const moveLocked = hasPred.has(r.item.id);
+                const sLocked = startLocked.has(r.item.id);
+                const eLocked = endLocked.has(r.item.id);
                 const canCreate =
                   canEdit && !isRollup && !(r.item.start_date && r.item.end_date);
                 const style = levelStyle(r.item.level);
@@ -993,7 +997,9 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                             data-keep-drawer
                             className={cn(
                               'absolute top-1 rounded text-[10px] text-white flex items-center justify-center select-none',
-                              isRollup ? 'bg-neutral-700 dark:bg-neutral-600 cursor-default' : `${style.bar} cursor-move`,
+                              isRollup
+                                ? 'bg-neutral-700 dark:bg-neutral-600 cursor-default'
+                                : cn(style.bar, moveLocked ? 'cursor-default' : 'cursor-move'),
                               drag?.id === r.item.id && 'ring-2 ring-blue-300',
                             )}
                             style={{
@@ -1022,14 +1028,18 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
 
                             {!isRollup && canEdit && (
                               <>
-                                <div
-                                  className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-white/40"
-                                  onPointerDown={(e) => startDrag(e, r, 'resize-left')}
-                                />
-                                <div
-                                  className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-white/40"
-                                  onPointerDown={(e) => startDrag(e, r, 'resize-right')}
-                                />
+                                {!sLocked && (
+                                  <div
+                                    className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-white/40"
+                                    onPointerDown={(e) => startDrag(e, r, 'resize-left')}
+                                  />
+                                )}
+                                {!eLocked && (
+                                  <div
+                                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-white/40"
+                                    onPointerDown={(e) => startDrag(e, r, 'resize-right')}
+                                  />
+                                )}
                               </>
                             )}
                           </div>
