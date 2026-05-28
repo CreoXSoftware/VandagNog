@@ -13,6 +13,7 @@ import { CalendarView } from '@/components/calendar/CalendarView';
 import { MembersPanel } from '@/components/members/MembersPanel';
 import { EditProjectDialog } from '@/components/project/EditProjectDialog';
 import { ProjectSummary } from '@/components/project/ProjectSummary';
+import { ProjectExportMenu } from '@/components/project/ProjectExportMenu';
 import { ProjectClientField } from '@/components/client/ProjectClientField';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/Tooltip';
 import { cn } from '@/lib/utils';
@@ -94,6 +95,11 @@ export function ProjectPage() {
           workingDays={project.working_days}
           nonWorkingDays={nonWorkingDays}
           members={members}
+        />
+        <ProjectExportMenu
+          projectName={project.name}
+          workItems={workItems}
+          dependencies={dependencies}
         />
         <div className="absolute left-1/2 -translate-x-1/2 flex gap-1 bg-neutral-100 dark:bg-neutral-800 rounded p-0.5">
           {(['gantt', 'calendar', 'members'] as const).map((v) => (

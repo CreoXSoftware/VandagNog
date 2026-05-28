@@ -401,6 +401,13 @@ export const af: Dict = {
     workDaysShort: '{n} wd',
     itemsShort: '{n} items',
   },
+  export: {
+    label: 'Voer uit',
+    title: 'Voer projek uit',
+    json: 'Werkitems (JSON)',
+    empty: 'Niks om uit te voer nie.',
+    done: 'Projek uitgevoer.',
+  },
   gantt: {
     expandAll: 'Brei alles uit',
     collapseAll: 'Vou alles in',

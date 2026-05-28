@@ -399,6 +399,13 @@ export const en = {
     workDaysShort: '{n} wd',
     itemsShort: '{n} items',
   },
+  export: {
+    label: 'Export',
+    title: 'Export project',
+    json: 'Work items (JSON)',
+    empty: 'Nothing to export.',
+    done: 'Project exported.',
+  },
   gantt: {
     expandAll: 'Expand all',
     collapseAll: 'Collapse all',

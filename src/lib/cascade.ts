@@ -165,25 +165,47 @@ export function computeCascade({
   }
 
   function gatingChildFor(parentId: string, depType: DependencyType, side: 'pred' | 'succ'): string | null {
-    const childIds = byParent.get(parentId) ?? [];
-    const kids = childIds
-      .map((id) => effective.get(id))
-      .filter((c): c is WorkItem => Boolean(c) && !c!.deleted_at);
-    if (kids.length === 0) return null;
     const usesStart = side === 'pred'
       ? depType === 'SS' || depType === 'SF'
       : depType === 'FS' || depType === 'SS';
-    let best = kids[0];
-    if (usesStart) {
-      for (const k of kids) {
-        if (k.start_date && (!best.start_date || k.start_date < best.start_date)) best = k;
+    let cur = parentId;
+    // Descend through nested summaries to the gating LEAF for this edge.
+    // A summary's rolled dates equal its gating descendant's edge, so ranking
+    // children by start/end at every level converges on the leaf that actually
+    // drives the constraint. Mirrors the server reschedule_from descent.
+    while (true) {
+      const childIds = byParent.get(cur) ?? [];
+      const kids = childIds
+        .map((id) => effective.get(id))
+        .filter((c): c is WorkItem => Boolean(c) && !c!.deleted_at);
+      if (kids.length === 0) return cur === parentId ? null : cur;
+      let best = kids[0];
+      if (usesStart) {
+        for (const k of kids) {
+          if (k.start_date && (!best.start_date || k.start_date < best.start_date)) best = k;
+        }
+      } else {
+        for (const k of kids) {
+          if (k.end_date && (!best.end_date || k.end_date > best.end_date)) best = k;
+        }
       }
-    } else {
-      for (const k of kids) {
-        if (k.end_date && (!best.end_date || k.end_date > best.end_date)) best = k;
+      cur = best.id;
+    }
+  }
+
+  // Pre-rollup all parents bottom-up so parent-as-predecessor reads have
+  // valid dates and gating-child descent can rank children at every level.
+  // Mirrors the server reschedule_from pre-rollup pass.
+  {
+    let pass = 0;
+    let changed = true;
+    while (changed) {
+      changed = false;
+      if (++pass > 1000) break;
+      for (const id of byParent.keys()) {
+        if (refreshParent(id)) changed = true;
       }
     }
-    return best.id;
   }
 
   // Initial root patch

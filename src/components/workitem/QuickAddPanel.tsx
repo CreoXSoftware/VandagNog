@@ -1,10 +1,12 @@
 import { useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Plus, Upload, ClipboardCopy } from 'lucide-react';
 import { toast } from 'sonner';
 import type { WorkItem } from '@/types/db';
+import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/Button';
-import { useCreateWorkItem } from '@/hooks/useWorkItems';
-import { useCreateDependency } from '@/hooks/useDependencies';
+import { useCreateWorkItem, workItemsKey } from '@/hooks/useWorkItems';
+import { useCreateDependency, dependenciesKey } from '@/hooks/useDependencies';
 import { useProject } from '@/hooks/useProjects';
 import { useNonWorkingDays } from '@/hooks/useNonWorkingDays';
 import { buildCalendar } from '@/components/gantt/ganttUtils';
@@ -51,6 +53,7 @@ type Mode = 'outline' | 'json';
 
 export function QuickAddPanel({ projectId, selected, onClose, onLastCreated }: Props) {
   const t = useT();
+  const qc = useQueryClient();
   const create = useCreateWorkItem();
   const createDep = useCreateDependency();
   const { data: project } = useProject(projectId);
@@ -129,7 +132,19 @@ export function QuickAddPanel({ projectId, selected, onClose, onLastCreated }: P
         createDependency: async (input) => {
           return createDep.mutateAsync(input);
         },
+        rescheduleProject: async () => {
+          const { error } = await supabase.rpc('reschedule_project', {
+            p_project_id: projectId,
+          });
+          if (error) throw error;
+        },
       });
+      // Scheduling ran via direct RPC (bypassing the optimistic cache); refetch
+      // the authoritative state so the Gantt reflects the cascaded positions.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: workItemsKey(projectId) }),
+        qc.invalidateQueries({ queryKey: dependenciesKey(projectId) }),
+      ]);
       toast.success(t('workItem.quickAddJsonImported', { tasks: summary.tasks, deps: summary.deps }));
       setJsonText('');
       if (lastId) onLastCreated(lastId);

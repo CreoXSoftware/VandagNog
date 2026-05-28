@@ -1,4 +1,4 @@
-import type { DependencyType } from '@/types/db';
+import type { Dependency, DependencyType, WorkItem } from '@/types/db';
 import { parseDate, snapBackward, snapForward, toDateString, type WorkCalendar } from '@/components/gantt/ganttUtils';
 import { endDateFromStartAndDuration } from '@/lib/duration';
 
@@ -330,10 +330,14 @@ export interface ImportArgs {
     type: DependencyType;
     lag_days: number;
   }) => Promise<unknown>;
+  // Runs one full-project schedule on the server after all items + deps are
+  // created. Replaces a per-source rescheduleFrom loop, which would reset
+  // each source's dates and overwrite cascade results from earlier calls.
+  rescheduleProject: () => Promise<void>;
 }
 
 export async function importTaskTree(args: ImportArgs): Promise<{ tasks: number; deps: number }> {
-  const { projectId, flat, calendar, createWorkItem, createDependency } = args;
+  const { projectId, flat, calendar, createWorkItem, createDependency, rescheduleProject } = args;
   const idMap = new Map<string, string>();
 
   for (const t of flat) {
@@ -372,15 +376,20 @@ export async function importTaskTree(args: ImportArgs): Promise<{ tasks: number;
 
   const depKeys = new Set<string>();
   let depCount = 0;
+  function recordDep(predId: string, succId: string, type: DependencyType): boolean {
+    const key = `${predId}|${succId}|${type}`;
+    if (depKeys.has(key)) return false;
+    depKeys.add(key);
+    return true;
+  }
+
   for (const t of flat) {
     const succId = idMap.get(t.tempId);
     if (!succId) continue;
     for (const p of t.predecessors) {
       const predId = idMap.get(p.id);
       if (!predId) continue;
-      const key = `${predId}|${succId}|${p.type}`;
-      if (depKeys.has(key)) continue;
-      depKeys.add(key);
+      if (!recordDep(predId, succId, p.type)) continue;
       await createDependency({
         project_id: projectId,
         predecessor_id: predId,
@@ -393,9 +402,7 @@ export async function importTaskTree(args: ImportArgs): Promise<{ tasks: number;
     for (const s of t.successors) {
       const succ2 = idMap.get(s.id);
       if (!succ2) continue;
-      const key = `${succId}|${succ2}|${s.type}`;
-      if (depKeys.has(key)) continue;
-      depKeys.add(key);
+      if (!recordDep(succId, succ2, s.type)) continue;
       await createDependency({
         project_id: projectId,
         predecessor_id: succId,
@@ -406,6 +413,12 @@ export async function importTaskTree(args: ImportArgs): Promise<{ tasks: number;
       depCount += 1;
     }
   }
+
+  // One deterministic full-project schedule on the server: pre-rolls all
+  // parents, enqueues every predecessor so every dep is processed, then BFS
+  // to fixpoint with multi-pred binding, gating-leaf descent, and ancestor
+  // rollups. Replaces a per-source loop that would revert moved sources.
+  await rescheduleProject();
 
   return { tasks: flat.length, deps: depCount };
 }
