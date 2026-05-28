@@ -11,6 +11,10 @@ interface Props {
   calendar: WorkCalendar;
   disabled?: boolean;
   placeholder?: string;
+  // Earliest legal date (inclusive). Picker disables dates before this; text
+  // input rejects them and reverts. Used by date inputs gated by an ASAP
+  // dependency binding.
+  minDate?: string | null;
   onChange: (v: string | null) => void;
 }
 
@@ -25,6 +29,7 @@ export function WorkingDayPicker({
   calendar,
   disabled = false,
   placeholder = 'yyyy-mm-dd',
+  minDate,
   onChange,
 }: Props) {
   const display = value ?? '';
@@ -34,13 +39,16 @@ export function WorkingDayPicker({
   React.useEffect(() => setText(display), [display]);
 
   const selected = React.useMemo(() => parseDate(value) ?? undefined, [value]);
+  const minDateObj = React.useMemo(() => (minDate ? parseDate(minDate) ?? undefined : undefined), [minDate]);
 
-  const isNonWorking = React.useCallback(
+  const dayDisabled = React.useCallback(
     (d: Date) => {
       if (!calendar.weekly.has(isoDow(d))) return true;
-      return calendar.nonWorking.has(toDateString(d));
+      if (calendar.nonWorking.has(toDateString(d))) return true;
+      if (minDateObj && d.getTime() < minDateObj.getTime()) return true;
+      return false;
     },
-    [calendar],
+    [calendar, minDateObj],
   );
 
   function commit() {
@@ -56,6 +64,10 @@ export function WorkingDayPicker({
     }
     const d = new Date(v + 'T00:00:00');
     if (isNaN(d.getTime())) {
+      setText(display);
+      return;
+    }
+    if (minDate && v < minDate) {
       setText(display);
       return;
     }
@@ -112,7 +124,7 @@ export function WorkingDayPicker({
               showOutsideDays
               selected={selected}
               defaultMonth={selected}
-              disabled={isNonWorking}
+              disabled={dayDisabled}
               onSelect={(d) => {
                 if (!d) return;
                 onChange(toDateString(d));

@@ -384,6 +384,7 @@ export const af: Dict = {
     edited: 'gewysig',
     endBeforeStart: 'Einddatum is voor begindatum.',
     needStartDate: 'Stel ’n begindatum voor jy tydsduur wysig.',
+    violatesBinding: 'Datum oortree ’n afhanklikheidsbeperking.',
   },
   summary: {
     title: 'Projek-opsomming',

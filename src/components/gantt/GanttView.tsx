@@ -25,6 +25,7 @@ import {
   startOfDay,
   toDateString,
 } from './ganttUtils';
+import { computeSuccessorBinding } from '@/lib/cascade';
 import { Badge } from '@/components/ui/Badge';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/Tooltip';
 import { QuickAddPanel } from '@/components/workitem/QuickAddPanel';
@@ -70,6 +71,10 @@ interface DragState {
   origEnd: Date;
   previewStart: Date;
   previewEnd: Date;
+  // ASAP binding: earliest legal start/end for this item from its incoming deps.
+  // Computed once at drag start (preds don't move during drag). Null = unconstrained.
+  startBinding: Date | null;
+  endBinding: Date | null;
 }
 
 const TREE_WIDTH_MIN = 220;
@@ -148,20 +153,8 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     [selectedId, workItems],
   );
 
-  // A predecessor pins one edge of its successor, so that edge can't be dragged:
-  // FS/SS pin the start, FF/SF pin the end. Move changes both edges, so any
-  // predecessor disables it. Editing the relationship is done via the dep editor.
-  const { startLocked, endLocked, hasPred } = useMemo(() => {
-    const start = new Set<string>();
-    const end = new Set<string>();
-    const any = new Set<string>();
-    for (const d of dependencies) {
-      any.add(d.successor_id);
-      if (d.type === 'FS' || d.type === 'SS') start.add(d.successor_id);
-      else end.add(d.successor_id);
-    }
-    return { startLocked: start, endLocked: end, hasPred: any };
-  }, [dependencies]);
+  // Inequality model: deps are ASAP constraints, not pinned edges. Nothing is
+  // un-draggable. Drag math clamps the bar at its bindings (see onMove below).
 
   // Resizable tree column
   const [treeWidth, setTreeWidth] = useState<number>(() => {
@@ -305,8 +298,9 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
 
-  // Drag handlers (bar move/resize). The edge a predecessor constrains is locked
-  // at the source (startDrag), so no clamping is needed here.
+  // Drag handlers (bar move/resize). Deps are ASAP inequalities; the bar is
+  // clamped at its startBinding/endBinding (snapshotted at drag-start). Dragging
+  // away from the binding is always free; dragging toward it hits the wall.
   useEffect(() => {
     if (!drag) return;
     function onMove(e: PointerEvent) {
@@ -317,17 +311,28 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
       let ne = drag!.origEnd;
       if (drag!.mode === 'move') {
         // Shift by working days so the bar jumps over weekends and keeps its work-day length.
-        const hops =
+        let hops =
           curIdx != null && startIdx != null
             ? workingDayHops(addDays(viewStart, startIdx), addDays(viewStart, curIdx), calendar)
             : 0;
+        // Minimum allowed shift: enough to keep both edges at-or-past their bindings.
+        let minHops = -Infinity;
+        if (drag!.startBinding) {
+          minHops = Math.max(minHops, workingDayHops(drag!.origStart, drag!.startBinding, calendar));
+        }
+        if (drag!.endBinding) {
+          minHops = Math.max(minHops, workingDayHops(drag!.origEnd, drag!.endBinding, calendar));
+        }
+        if (minHops > -Infinity && hops < minHops) hops = minHops;
         ns = addWorkingDays(drag!.origStart, hops, calendar);
         ne = addWorkingDays(drag!.origEnd, hops, calendar);
       } else if (drag!.mode === 'resize-left') {
         ns = snapBackward(addDays(drag!.origStart, deltaDays), calendar);
+        if (drag!.startBinding && ns < drag!.startBinding) ns = drag!.startBinding;
         if (ns > drag!.origEnd) ns = drag!.origEnd;
       } else if (drag!.mode === 'resize-right') {
         ne = snapBackward(addDays(drag!.origEnd, deltaDays), calendar);
+        if (drag!.endBinding && ne < drag!.endBinding) ne = drag!.endBinding;
         if (ne < drag!.origStart) ne = drag!.origStart;
       }
       setDrag({ ...drag!, previewStart: ns, previewEnd: ne });
@@ -674,14 +679,17 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   function startDrag(e: React.PointerEvent, row: FlatRow, mode: DragMode) {
     if (!canEdit) return;
     if (row.hasChildren) return; // rollup parents are read-only
-    const id = row.item.id;
-    // A predecessor owns the pinned edge — block the drag that would move it.
-    if (mode === 'move' && hasPred.has(id)) return;
-    if (mode === 'resize-left' && startLocked.has(id)) return;
-    if (mode === 'resize-right' && endLocked.has(id)) return;
     const s = parseDate(row.item.start_date);
     const en = parseDate(row.item.end_date);
     if (!s || !en) return;
+    // Snapshot the ASAP bindings now; preds don't move during the drag, so
+    // recomputing per pointermove would be wasted work.
+    const { startBinding, endBinding } = computeSuccessorBinding({
+      successorId: row.item.id,
+      items: workItems,
+      dependencies,
+      calendar,
+    });
     e.preventDefault();
     e.stopPropagation();
     setDrag({
@@ -692,6 +700,8 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
       origEnd: en,
       previewStart: s,
       previewEnd: en,
+      startBinding,
+      endBinding,
     });
   }
 
@@ -954,9 +964,6 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
               {flatRows.map((r) => {
                 const rect = barRect(r);
                 const isRollup = r.hasChildren;
-                const moveLocked = hasPred.has(r.item.id);
-                const sLocked = startLocked.has(r.item.id);
-                const eLocked = endLocked.has(r.item.id);
                 const canCreate =
                   canEdit && !isRollup && !(r.item.start_date && r.item.end_date);
                 const style = levelStyle(r.item.level);
@@ -999,7 +1006,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                               'absolute top-1 rounded text-[10px] text-white flex items-center justify-center select-none',
                               isRollup
                                 ? 'bg-neutral-700 dark:bg-neutral-600 cursor-default'
-                                : cn(style.bar, moveLocked ? 'cursor-default' : 'cursor-move'),
+                                : cn(style.bar, 'cursor-move'),
                               drag?.id === r.item.id && 'ring-2 ring-blue-300',
                             )}
                             style={{
@@ -1028,18 +1035,14 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
 
                             {!isRollup && canEdit && (
                               <>
-                                {!sLocked && (
-                                  <div
-                                    className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-white/40"
-                                    onPointerDown={(e) => startDrag(e, r, 'resize-left')}
-                                  />
-                                )}
-                                {!eLocked && (
-                                  <div
-                                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-white/40"
-                                    onPointerDown={(e) => startDrag(e, r, 'resize-right')}
-                                  />
-                                )}
+                                <div
+                                  className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-white/40"
+                                  onPointerDown={(e) => startDrag(e, r, 'resize-left')}
+                                />
+                                <div
+                                  className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-white/40"
+                                  onPointerDown={(e) => startDrag(e, r, 'resize-right')}
+                                />
                               </>
                             )}
                           </div>

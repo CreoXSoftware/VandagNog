@@ -382,6 +382,7 @@ export const en = {
     edited: 'edited',
     endBeforeStart: 'End date is before start date.',
     needStartDate: 'Set a start date before editing duration.',
+    violatesBinding: 'Date violates a dependency constraint.',
   },
   summary: {
     title: 'Project summary',

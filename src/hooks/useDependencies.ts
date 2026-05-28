@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import type { Dependency, DependencyType, NonWorkingDay, Project, WorkItem } from '@/types/db';
-import { computeCascade, computeSuccessorPosition } from '@/lib/cascade';
+import { computeCascade, computeRebindShift } from '@/lib/cascade';
 import { buildCalendar } from '@/components/gantt/ganttUtils';
 import { markLocalWorkItemMutation } from '@/lib/localMutationGuard';
 import { workItemsKey } from './useWorkItems';
@@ -75,20 +75,21 @@ export function useCreateDependency() {
         type: input.type,
         lag_days: input.lag_days,
       } as Dependency;
-      // Bind across ALL of the successor's predecessors (incl. the new one):
-      // a later-ending existing predecessor keeps gating, so adding an earlier
-      // predecessor must not pull the successor back.
-      const pos = computeSuccessorPosition({
+      // Inequality model: only push the successor if the new dep is binding
+      // tighter than the successor's current dates. If it already satisfies the
+      // constraint (succ.start >= startBinding, succ.end >= endBinding), no
+      // move and no reschedule_from call.
+      const shift = computeRebindShift({
         successorId: succ.id,
         items: prev,
         dependencies: [...prevDeps, provisionalDep],
         calendar,
       });
-      if (pos && (pos.newStart !== succ.start_date || pos.newEnd !== succ.end_date)) {
+      if (shift) {
         const result = computeCascade({
           rootId: succ.id,
-          newStart: pos.newStart,
-          newEnd: pos.newEnd,
+          newStart: shift.newStart,
+          newEnd: shift.newEnd,
           items: prev,
           dependencies: [...prevDeps, provisionalDep],
           calendar,
@@ -100,7 +101,7 @@ export function useCreateDependency() {
             return p ? ({ ...wi, ...p } as WorkItem) : wi;
           }),
         );
-        pendingReschedRef.current = { id: succ.id, start: pos.newStart, end: pos.newEnd };
+        pendingReschedRef.current = { id: succ.id, start: shift.newStart, end: shift.newEnd };
       }
 
       return { prev, prevDeps };
@@ -165,19 +166,19 @@ export function useUpdateDependency() {
         const nonWorking = qc.getQueryData<NonWorkingDay[]>(nonWorkingDaysKey(input.project_id)) ?? [];
         const calendar = buildCalendar(project?.working_days ?? [1, 2, 3, 4, 5], nonWorking);
         const mergedDeps = prevDeps.map((d) => (d.id === input.id ? updatedDep : d));
-        // Bind across ALL predecessors: an edit to one dep only moves the
-        // successor if that dep is (or becomes) the gating one.
-        const pos = computeSuccessorPosition({
+        // Inequality model: relaxing lag (binding moves earlier) leaves succ in
+        // place; tightening lag past the current succ.start (or .end) pushes it.
+        const shift = computeRebindShift({
           successorId: succ.id,
           items: prev,
           dependencies: mergedDeps,
           calendar,
         });
-        if (pos && (pos.newStart !== succ.start_date || pos.newEnd !== succ.end_date)) {
+        if (shift) {
           const result = computeCascade({
             rootId: succ.id,
-            newStart: pos.newStart,
-            newEnd: pos.newEnd,
+            newStart: shift.newStart,
+            newEnd: shift.newEnd,
             items: prev,
             dependencies: mergedDeps,
             calendar,
@@ -189,7 +190,7 @@ export function useUpdateDependency() {
               return p ? ({ ...wi, ...p } as WorkItem) : wi;
             }),
           );
-          pendingReschedRef.current = { id: succ.id, start: pos.newStart, end: pos.newEnd };
+          pendingReschedRef.current = { id: succ.id, start: shift.newStart, end: shift.newEnd };
         }
       }
 

@@ -8,7 +8,8 @@ import { WorkingDayPicker } from '@/components/ui/WorkingDayPicker';
 import { formatDate } from '@/lib/utils';
 import type { Dependency, NonWorkingDay, ProjectMember, WorkItem } from '@/types/db';
 import { useUpdateWorkItem, useRescheduleFrom } from '@/hooks/useWorkItems';
-import { buildCalendar, type WorkCalendar } from '@/components/gantt/ganttUtils';
+import { buildCalendar, toDateString, type WorkCalendar } from '@/components/gantt/ganttUtils';
+import { computeSuccessorBinding } from '@/lib/cascade';
 import { DependencyEditor } from './DependencyEditor';
 import { CommentThread } from './CommentThread';
 import { toast } from 'sonner';
@@ -45,6 +46,21 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
 
   const calendar = useMemo(() => buildCalendar(workingDays, nonWorkingDays), [workingDays, nonWorkingDays]);
 
+  // ASAP binding from incoming dependencies — earliest legal start/end. Drives
+  // date-input min and the final guard in handleDateChange.
+  const { startBindingStr, endBindingStr } = useMemo(() => {
+    const b = computeSuccessorBinding({
+      successorId: workItem.id,
+      items: allItems,
+      dependencies,
+      calendar,
+    });
+    return {
+      startBindingStr: b.startBinding ? toDateString(b.startBinding) : null,
+      endBindingStr: b.endBinding ? toDateString(b.endBinding) : null,
+    };
+  }, [workItem.id, allItems, dependencies, calendar]);
+
   const breadcrumb = useMemo(() => buildBreadcrumb(workItem, allItems), [workItem, allItems]);
   const children = useMemo(() => allItems.filter((i) => i.parent_id === workItem.id), [allItems, workItem.id]);
   const numbers = useMemo(() => outlineNumbers(allItems), [allItems]);
@@ -71,6 +87,15 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
     }
     if (newEnd < newStart) {
       toast.error(t('cascade.endBeforeStart'));
+      return;
+    }
+    // Final guard against typing/pasting a date that violates an ASAP binding.
+    // The picker disables those days but the text input could still accept one.
+    if (
+      (startBindingStr && newStart < startBindingStr) ||
+      (endBindingStr && newEnd < endBindingStr)
+    ) {
+      toast.error(t('cascade.violatesBinding'));
       return;
     }
     reschedule.mutate(
@@ -176,6 +201,7 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
                 value={workItem.start_date}
                 calendar={calendar}
                 disabled={!canEditDates}
+                minDate={startBindingStr}
                 onChange={(v) => handleDateChange(v, workItem.end_date)}
               />
             </DisabledHint>
@@ -186,6 +212,7 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
                 value={workItem.end_date}
                 calendar={calendar}
                 disabled={!canEditDates}
+                minDate={endBindingStr}
                 onChange={(v) => handleDateChange(workItem.start_date, v)}
               />
             </DisabledHint>

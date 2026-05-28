@@ -1,8 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import type { Dependency, NonWorkingDay, Project, WorkItem } from '@/types/db';
-import { computeCascade, computeIncomingLagUpdates, type LagUpdate } from '@/lib/cascade';
+import { computeCascade } from '@/lib/cascade';
 import { buildCalendar } from '@/components/gantt/ganttUtils';
 import { markLocalWorkItemMutation } from '@/lib/localMutationGuard';
 import { dependenciesKey } from './useDependencies';
@@ -175,7 +174,6 @@ export function useRestoreWorkItem() {
 
 export function useRescheduleFrom() {
   const qc = useQueryClient();
-  const pendingLagUpdatesRef = useRef<LagUpdate[]>([]);
   return useMutation({
     mutationFn: async (input: { project_id: string; work_item_id: string; new_start: string; new_end: string }) => {
       const { error } = await supabase.rpc('reschedule_from', {
@@ -184,16 +182,6 @@ export function useRescheduleFrom() {
         p_new_end: input.new_end,
       });
       if (error) throw error;
-
-      const lagUpdates = pendingLagUpdatesRef.current;
-      pendingLagUpdatesRef.current = [];
-      for (const u of lagUpdates) {
-        const { error: depErr } = await supabase
-          .from('dependencies')
-          .update({ lag_days: u.lag_days })
-          .eq('id', u.id);
-        if (depErr) throw depErr;
-      }
     },
     onMutate: async (input) => {
       markLocalWorkItemMutation();
@@ -218,16 +206,6 @@ export function useRescheduleFrom() {
         calendar,
       });
 
-      const lagUpdates = computeIncomingLagUpdates({
-        rootId: input.work_item_id,
-        newStart: input.new_start,
-        newEnd: input.new_end,
-        items: prev,
-        dependencies: prevDeps,
-        calendar,
-      });
-      pendingLagUpdatesRef.current = lagUpdates;
-
       qc.setQueryData<WorkItem[]>(
         workItemsKey(input.project_id),
         prev.map((wi) => {
@@ -236,21 +214,9 @@ export function useRescheduleFrom() {
         }),
       );
 
-      if (lagUpdates.length > 0) {
-        const lagMap = new Map(lagUpdates.map((u) => [u.id, u.lag_days]));
-        qc.setQueryData<Dependency[]>(
-          dependenciesKey(input.project_id),
-          prevDeps.map((d) => {
-            const lag = lagMap.get(d.id);
-            return lag != null ? { ...d, lag_days: lag } : d;
-          }),
-        );
-      }
-
       return { prev, prevDeps };
     },
     onError: (_e, input, ctx) => {
-      pendingLagUpdatesRef.current = [];
       if (ctx?.prev) qc.setQueryData(workItemsKey(input.project_id), ctx.prev);
       if (ctx?.prevDeps) qc.setQueryData(dependenciesKey(input.project_id), ctx.prevDeps);
     },
