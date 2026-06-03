@@ -3,69 +3,73 @@ import type { WorkItem } from '@/types/db';
 export interface LevelStyle {
   bg: string;
   text: string;
-  bar: string;
-  barProgress: string;
 }
 
-// Tailwind needs static class names. Palette cycles by depth.
-const PALETTE: LevelStyle[] = [
-  {
-    bg: 'bg-purple-100 dark:bg-purple-950',
-    text: 'text-purple-700 dark:text-purple-300',
-    bar: 'bg-purple-500',
-    barProgress: 'bg-purple-700',
-  },
-  {
-    bg: 'bg-blue-100 dark:bg-blue-950',
-    text: 'text-blue-700 dark:text-blue-300',
-    bar: 'bg-blue-500',
-    barProgress: 'bg-blue-700',
-  },
-  {
-    bg: 'bg-emerald-100 dark:bg-emerald-950',
-    text: 'text-emerald-700 dark:text-emerald-300',
-    bar: 'bg-emerald-500',
-    barProgress: 'bg-emerald-700',
-  },
-  {
-    bg: 'bg-amber-100 dark:bg-amber-950',
-    text: 'text-amber-800 dark:text-amber-300',
-    bar: 'bg-amber-500',
-    barProgress: 'bg-amber-700',
-  },
-  {
-    bg: 'bg-sky-100 dark:bg-sky-950',
-    text: 'text-sky-700 dark:text-sky-300',
-    bar: 'bg-sky-500',
-    barProgress: 'bg-sky-700',
-  },
-  {
-    bg: 'bg-pink-100 dark:bg-pink-950',
-    text: 'text-pink-700 dark:text-pink-300',
-    bar: 'bg-pink-500',
-    barProgress: 'bg-pink-700',
-  },
-  {
-    bg: 'bg-teal-100 dark:bg-teal-950',
-    text: 'text-teal-700 dark:text-teal-300',
-    bar: 'bg-teal-500',
-    barProgress: 'bg-teal-700',
-  },
-  {
-    bg: 'bg-orange-100 dark:bg-orange-950',
-    text: 'text-orange-700 dark:text-orange-300',
-    bar: 'bg-orange-500',
-    barProgress: 'bg-orange-700',
-  },
-];
+// Level no longer drives bar color (status does). The badge still shows "L1/L2..."
+// in a neutral palette so the level text alone communicates depth.
+const NEUTRAL_LEVEL_STYLE: LevelStyle = {
+  bg: 'bg-neutral-100 dark:bg-neutral-800',
+  text: 'text-neutral-600 dark:text-neutral-300',
+};
 
-export function levelStyle(depth: number): LevelStyle {
-  const d = Math.max(0, depth | 0);
-  return PALETTE[d % PALETTE.length];
+export function levelStyle(_depth: number): LevelStyle {
+  return NEUTRAL_LEVEL_STYLE;
 }
 
 export function levelLabel(depth: number): string {
   return `L${(depth | 0) + 1}`;
+}
+
+// ---- Status palette (drives bar color in the gantt) -----------------------
+//
+// Status is derived from progress + dates against `today`:
+//   done        – progress >= 100                                       → emerald
+//   overdue     – end_date  <  today AND progress < 100                 → red
+//   active      – start_date <= today <= end_date AND progress < 100    → yellow
+//   future      – start_date >  today AND progress < 100                → blue
+//   unscheduled – missing dates                                          → neutral
+//
+// Bar = darker shade (uncompleted span). barProgress overlay = lighter shade
+// drawn from the left, width = progress%. Two-step Tailwind difference for a
+// subtle but distinct fill.
+
+export type WorkItemStatus = 'done' | 'overdue' | 'active' | 'future' | 'unscheduled';
+
+export interface StatusStyle {
+  bar: string;
+  barProgress: string;
+  text: string;
+}
+
+// Light shades supplied by product spec; dark shades are ~10% darker per channel.
+//   blue   light #3E7CB2  dark #3870A0
+//   green  light #6BAC66  dark #609B5C
+//   yellow light #DFD764  dark #C9C25A
+//   red    light #BF4448  dark #AC3D41
+// "done" uses only the light green (whole bar represents fully-completed).
+const STATUS_STYLES: Record<WorkItemStatus, StatusStyle> = {
+  done:        { bar: 'bg-[#6BAC66]', barProgress: 'bg-[#6BAC66]', text: 'text-neutral-900' },
+  overdue:     { bar: 'bg-[#AC3D41]', barProgress: 'bg-[#BF4448]', text: 'text-white' },
+  // Yellow needs dark text — white on yellow has insufficient contrast at any shade.
+  active:      { bar: 'bg-[#C9C25A]', barProgress: 'bg-[#DFD764]', text: 'text-neutral-900' },
+  future:      { bar: 'bg-[#3870A0]', barProgress: 'bg-[#3E7CB2]', text: 'text-white' },
+  unscheduled: { bar: 'bg-neutral-600', barProgress: 'bg-neutral-400', text: 'text-white' },
+};
+
+// Day-only compare: "YYYY-MM-DD" lexicographic order matches calendar order.
+export function statusOf(
+  item: Pick<WorkItem, 'progress' | 'start_date' | 'end_date'>,
+  todayIso: string,
+): WorkItemStatus {
+  if (item.progress >= 100) return 'done';
+  if (!item.start_date || !item.end_date) return 'unscheduled';
+  if (item.end_date < todayIso) return 'overdue';
+  if (item.start_date <= todayIso) return 'active';
+  return 'future';
+}
+
+export function statusStyle(status: WorkItemStatus): StatusStyle {
+  return STATUS_STYLES[status];
 }
 
 // Sort siblings consistently for hierarchy display & outline numbering.

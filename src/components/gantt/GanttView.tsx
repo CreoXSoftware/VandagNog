@@ -31,7 +31,7 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/Tooltip
 import { QuickAddPanel } from '@/components/workitem/QuickAddPanel';
 import { useI18n, useT } from '@/lib/i18n';
 import { useAuth } from '@/hooks/useAuth';
-import { levelStyle, levelLabel, outlineNumbers, siblingCompare } from '@/lib/levels';
+import { levelLabel, outlineNumbers, siblingCompare, statusOf, statusStyle } from '@/lib/levels';
 import { GanttFilters } from './GanttFilters';
 import {
   EMPTY_FILTER,
@@ -725,6 +725,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
 
   const todayIdx = diffDays(today, viewStart);
   const todayX = axis.xOf(todayIdx);
+  const todayIso = toDateString(today);
 
   return (
     <div className="h-full flex flex-col bg-white dark:bg-neutral-900">
@@ -846,6 +847,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
               const dropIndent = isDropTarget && overRow!.pos === 'indent';
               const dropOutdent = isDropTarget && overRow!.pos === 'outdent';
               const num = numbers.get(r.item.id) ?? '';
+              const rowStatusStyle = statusStyle(statusOf(r.item, todayIso));
               return (
                 <div
                   key={r.item.id}
@@ -881,7 +883,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                   >
                     {expanded.has(r.item.id) ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   </button>
-                  <Badge kind={r.item.level}>{levelLabel(r.item.level)}</Badge>
+                  <Badge className={cn(rowStatusStyle.bar, rowStatusStyle.text)}>{levelLabel(r.item.level)}</Badge>
                   <span className="text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500 shrink-0">{num}</span>
                   <span className="text-xs truncate flex-1">{r.item.name}</span>
                   <span className="text-[10px] text-neutral-400 dark:text-neutral-500 w-7 text-right tabular-nums group-hover:hidden">{formatWorkDuration(wd)}</span>
@@ -966,7 +968,8 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                 const isRollup = r.hasChildren;
                 const canCreate =
                   canEdit && !isRollup && !(r.item.start_date && r.item.end_date);
-                const style = levelStyle(r.item.level);
+                const status = statusOf(r.item, todayIso);
+                const sStyle = statusStyle(status);
                 const creating = createDrag?.id === r.item.id;
                 const createRect = creating
                   ? (() => {
@@ -1003,10 +1006,10 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                           <div
                             data-keep-drawer
                             className={cn(
-                              'absolute top-1 rounded text-[10px] text-white flex items-center justify-center select-none',
-                              isRollup
-                                ? 'bg-neutral-700 dark:bg-neutral-600 cursor-default'
-                                : cn(style.bar, 'cursor-move'),
+                              'absolute top-1 rounded text-[10px] flex items-center justify-center select-none',
+                              sStyle.bar,
+                              sStyle.text,
+                              isRollup ? 'cursor-default' : 'cursor-move',
                               drag?.id === r.item.id && 'ring-2 ring-blue-300',
                             )}
                             style={{
@@ -1020,14 +1023,13 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                               onSelect(r.item.id);
                             }}
                           >
-                            {/* progress fill */}
-                            <div
-                              className={cn(
-                                'absolute left-0 top-0 bottom-0 rounded-l',
-                                isRollup ? 'bg-neutral-900/40' : style.barProgress,
-                              )}
-                              style={{ width: `${r.item.progress}%` }}
-                            />
+                            {/* progress fill — lighter shade overlay; hidden when status is 'done' (full bar already reads as complete) */}
+                            {status !== 'done' && (
+                              <div
+                                className={cn('absolute left-0 top-0 bottom-0 rounded-l', sStyle.barProgress)}
+                                style={{ width: `${r.item.progress}%` }}
+                              />
+                            )}
                             <span className="relative px-1 truncate pointer-events-none">
                               <span className="opacity-70 tabular-nums mr-1">{numbers.get(r.item.id) ?? ''}</span>
                               {r.item.name}

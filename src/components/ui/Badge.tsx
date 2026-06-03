@@ -15,12 +15,17 @@ interface BadgeProps {
 }
 
 export function Badge({ children, kind, className }: BadgeProps) {
-  let palette: string;
-  if (typeof kind === 'number') {
-    const s = levelStyle(kind);
-    palette = `${s.bg} ${s.text}`;
-  } else {
-    palette = roleClass[kind ?? 'default'] ?? roleClass.default;
+  // When the caller supplies className, treat it as the authoritative palette.
+  // Otherwise applying a default `dark:bg-neutral-800` here would override the
+  // caller's `bg-[#hex]` in dark mode (tailwind-merge keeps dark: variants).
+  let palette = '';
+  if (!className) {
+    if (typeof kind === 'number') {
+      const s = levelStyle(kind);
+      palette = `${s.bg} ${s.text}`;
+    } else {
+      palette = roleClass[kind ?? 'default'] ?? roleClass.default;
+    }
   }
   return (
     <span

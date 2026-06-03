@@ -5,7 +5,7 @@ import { Input, Textarea } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { DisabledHint } from '@/components/ui/DisabledHint';
 import { WorkingDayPicker } from '@/components/ui/WorkingDayPicker';
-import { formatDate } from '@/lib/utils';
+import { cn, formatDate } from '@/lib/utils';
 import type { Dependency, NonWorkingDay, ProjectMember, WorkItem } from '@/types/db';
 import { useUpdateWorkItem, useRescheduleFrom } from '@/hooks/useWorkItems';
 import { buildCalendar, toDateString, type WorkCalendar } from '@/components/gantt/ganttUtils';
@@ -21,7 +21,7 @@ import {
   workItemDurationLabel,
   endDateFromStartAndDuration,
 } from '@/lib/duration';
-import { levelLabel, outlineNumbers } from '@/lib/levels';
+import { levelLabel, outlineNumbers, statusOf, statusStyle } from '@/lib/levels';
 
 interface Props {
   workItem: WorkItem;
@@ -45,6 +45,8 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
   const t = useT();
 
   const calendar = useMemo(() => buildCalendar(workingDays, nonWorkingDays), [workingDays, nonWorkingDays]);
+  const todayIso = useMemo(() => toDateString(new Date()), []);
+  const headerStatusStyle = statusStyle(statusOf(workItem, todayIso));
 
   // ASAP binding from incoming dependencies — earliest legal start/end. Drives
   // date-input min and the final guard in handleDateChange.
@@ -169,7 +171,7 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
     >
       <div className="p-4 space-y-4">
         <div className="flex items-center gap-2">
-          <Badge kind={workItem.level}>{levelLabel(workItem.level)}</Badge>
+          <Badge className={cn(headerStatusStyle.bar, headerStatusStyle.text)}>{levelLabel(workItem.level)}</Badge>
           <span className="text-[10px] tabular-nums text-neutral-500 dark:text-neutral-400">#{numbers.get(workItem.id) ?? ''}</span>
           {!isLeaf && (
             <span className="text-[10px] text-neutral-500 dark:text-neutral-400">{t('workItem.rollupParent')}</span>
@@ -262,7 +264,7 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
               type="range"
               min={0}
               max={100}
-              step={1}
+              step={25}
               disabled={!canEditDates}
               value={workItem.progress}
               onChange={(e) => patch({ progress: Number(e.target.value) })}
@@ -286,18 +288,21 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
           <div className="border-t border-neutral-200 dark:border-neutral-800 -mx-4 px-4 pt-3">
             <SectionHeader>{t('workItem.children', { count: children.length })}</SectionHeader>
             <div className="space-y-1">
-              {children.map((c) => (
+              {children.map((c) => {
+                const childStatusStyle = statusStyle(statusOf(c, todayIso));
+                return (
                 <button
                   key={c.id}
                   onClick={() => onNavigate(c.id)}
                   className="w-full text-left px-2 py-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-800 flex items-center gap-2 text-sm"
                 >
-                  <Badge kind={c.level}>{levelLabel(c.level)}</Badge>
+                  <Badge className={cn(childStatusStyle.bar, childStatusStyle.text)}>{levelLabel(c.level)}</Badge>
                   <span className="text-[11px] tabular-nums text-neutral-400 dark:text-neutral-500">{numbers.get(c.id) ?? ''}</span>
                   <span className="flex-1 truncate">{c.name}</span>
                   <span className="text-[11px] text-neutral-400 dark:text-neutral-500">{c.progress}%</span>
                 </button>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
