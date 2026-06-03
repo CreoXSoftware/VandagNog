@@ -41,18 +41,20 @@ export interface StatusStyle {
   text: string;
 }
 
-// Light shades supplied by product spec; dark shades are ~10% darker per channel.
-//   blue   light #3E7CB2  dark #3870A0
-//   green  light #6BAC66  dark #609B5C
-//   yellow light #DFD764  dark #C9C25A
-//   red    light #BF4448  dark #AC3D41
-// "done" uses only the light green (whole bar represents fully-completed).
+// Vibrant palette tuned to the logo's warm orange→yellow gradient (#fc861d → #f4e23c)
+// over a dark navy field. Amber on "active" echoes that gradient; emerald/red/blue
+// round out a high-saturation set that reads on both light and dark backgrounds.
+//   green  bar #16A34A  progress #22C55E   (emerald-600 / emerald-500)
+//   red    bar #DC2626  progress #EF4444   (red-600 / red-500)
+//   amber  bar #F59E0B  progress #FBBF24   (amber-500 / amber-400) — logo-tone
+//   blue   bar #2563EB  progress #3B82F6   (blue-600 / blue-500)
+// "done" uses a single emerald shade (fully-completed bar).
 const STATUS_STYLES: Record<WorkItemStatus, StatusStyle> = {
-  done:        { bar: 'bg-[#6BAC66]', barProgress: 'bg-[#6BAC66]', text: 'text-neutral-900' },
-  overdue:     { bar: 'bg-[#AC3D41]', barProgress: 'bg-[#BF4448]', text: 'text-white' },
-  // Yellow needs dark text — white on yellow has insufficient contrast at any shade.
-  active:      { bar: 'bg-[#C9C25A]', barProgress: 'bg-[#DFD764]', text: 'text-neutral-900' },
-  future:      { bar: 'bg-[#3870A0]', barProgress: 'bg-[#3E7CB2]', text: 'text-white' },
+  done:        { bar: 'bg-[#22C55E]', barProgress: 'bg-[#22C55E]', text: 'text-white' },
+  overdue:     { bar: 'bg-[#DC2626]', barProgress: 'bg-[#EF4444]', text: 'text-white' },
+  // Amber needs dark text — white on amber has insufficient contrast at any shade.
+  active:      { bar: 'bg-[#F59E0B]', barProgress: 'bg-[#FBBF24]', text: 'text-neutral-900' },
+  future:      { bar: 'bg-[#2563EB]', barProgress: 'bg-[#3B82F6]', text: 'text-white' },
   unscheduled: { bar: 'bg-neutral-600', barProgress: 'bg-neutral-400', text: 'text-white' },
 };
 
