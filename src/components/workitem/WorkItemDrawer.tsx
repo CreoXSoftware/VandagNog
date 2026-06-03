@@ -48,6 +48,18 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
   const todayIso = useMemo(() => toDateString(new Date()), []);
   const headerStatusStyle = statusStyle(statusOf(workItem, todayIso));
 
+  // Slider draft: range input fires onChange on every step during drag. If we
+  // patch on each tick the per-mutation invalidate refetches can race with later
+  // PATCHes and snap the value back. Hold a local draft; commit on release.
+  const [progressDraft, setProgressDraft] = useState<number | null>(null);
+  useEffect(() => { setProgressDraft(null); }, [workItem.id]);
+  const sliderValue = progressDraft ?? workItem.progress;
+  function commitProgress() {
+    if (progressDraft == null) return;
+    if (progressDraft !== workItem.progress) patch({ progress: progressDraft });
+    setProgressDraft(null);
+  }
+
   // ASAP binding from incoming dependencies — earliest legal start/end. Drives
   // date-input min and the final guard in handleDateChange.
   const { startBindingStr, endBindingStr } = useMemo(() => {
@@ -258,18 +270,51 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
           </div>
         </Field>
 
-        <Field label={t('workItem.progress', { pct: workItem.progress })}>
+        <Field label={t('workItem.progress', { pct: sliderValue })}>
           <DisabledHint disabled={!canEditDates} reason={dateReason}>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              step={25}
-              disabled={!canEditDates}
-              value={workItem.progress}
-              onChange={(e) => patch({ progress: Number(e.target.value) })}
-              className="w-full disabled:opacity-40"
-            />
+            {/* Train-station-map slider: a horizontal line with 5 stations.
+                Native <input> sits transparent on top for keyboard + pointer; visuals below render the line and stops. */}
+            <div className={cn('relative h-6 select-none', !canEditDates && 'opacity-40')}>
+              {/* Base line (full track) */}
+              <div className="absolute left-[7px] right-[7px] top-1/2 -translate-y-1/2 h-[3px] rounded-full bg-neutral-300 dark:bg-neutral-700 pointer-events-none" />
+              {/* Travelled segment, up to current value */}
+              <div
+                className={cn('absolute left-[7px] top-1/2 -translate-y-1/2 h-[3px] rounded-full pointer-events-none', headerStatusStyle.bar)}
+                style={{ width: `calc((100% - 14px) * ${sliderValue} / 100)` }}
+              />
+              {/* Stations */}
+              {[0, 25, 50, 75, 100].map((v) => {
+                const reached = v <= sliderValue;
+                const current = v === sliderValue;
+                return (
+                  <div
+                    key={v}
+                    className={cn(
+                      'absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 pointer-events-none transition-[width,height]',
+                      current ? 'w-4 h-4' : 'w-3 h-3',
+                      reached
+                        ? cn(headerStatusStyle.bar, 'border-white dark:border-neutral-900')
+                        : 'bg-white dark:bg-neutral-900 border-neutral-400 dark:border-neutral-600',
+                    )}
+                    style={{ left: `calc(7px + (100% - 14px) * ${v} / 100)` }}
+                  />
+                );
+              })}
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={25}
+                disabled={!canEditDates}
+                value={sliderValue}
+                onChange={(e) => setProgressDraft(Number(e.target.value))}
+                onPointerUp={commitProgress}
+                onKeyUp={commitProgress}
+                onBlur={commitProgress}
+                aria-label={t('workItem.progress', { pct: sliderValue })}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
+              />
+            </div>
           </DisabledHint>
         </Field>
 
