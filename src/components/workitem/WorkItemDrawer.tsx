@@ -12,6 +12,7 @@ import { buildCalendar, toDateString, type WorkCalendar } from '@/components/gan
 import { computeSuccessorBinding } from '@/lib/cascade';
 import { DependencyEditor } from './DependencyEditor';
 import { CommentThread } from './CommentThread';
+import { AttachmentsSection } from './AttachmentsSection';
 import { toast } from 'sonner';
 import { Avatar } from '@/components/ui/Avatar';
 import { displayName } from '@/lib/userDisplay';
@@ -351,6 +352,15 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
             </div>
           </div>
         )}
+
+        <div className="border-t border-neutral-200 dark:border-neutral-800 -mx-4 px-4 pt-3">
+          <SectionHeader>{t('workItem.attachments')}</SectionHeader>
+          <AttachmentsSection
+            workItemId={workItem.id}
+            projectId={workItem.project_id}
+            canEdit={canEdit}
+          />
+        </div>
 
         <div className="border-t border-neutral-200 dark:border-neutral-800 -mx-4 px-4 pt-3">
           <div className="flex gap-1 mb-2 bg-neutral-100 dark:bg-neutral-800 rounded p-0.5 w-fit text-xs">

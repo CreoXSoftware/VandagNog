@@ -148,6 +148,18 @@ export interface Comment {
   deleted_at: string | null;
 }
 
+export interface WorkItemAttachment {
+  id: string;
+  work_item_id: string;
+  project_id: string;
+  storage_path: string;
+  file_name: string;
+  file_size: number;
+  mime_type: string | null;
+  uploaded_by: string | null;
+  created_at: string;
+}
+
 export type NotificationEvent =
   | 'assigned'
   | 'mentioned_in_comment'
