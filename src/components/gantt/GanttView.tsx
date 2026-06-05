@@ -94,8 +94,16 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   const range = useMemo(() => computeRange(workItems), [workItems]);
 
   const [expanded, setExpanded] = useState<Set<string>>(() => {
-    return new Set(workItems.filter((w) => w.level < 2).map((w) => w.id));
+    return new Set(workItems.map((w) => w.id));
   });
+  // Items load async; expand any that arrive after mount until user toggles manually.
+  const expandedInitRef = useRef(false);
+  useEffect(() => {
+    if (expandedInitRef.current) return;
+    if (workItems.length === 0) return;
+    expandedInitRef.current = true;
+    setExpanded(new Set(workItems.map((w) => w.id)));
+  }, [workItems]);
 
   const { user } = useAuth();
   const filterStorageKey = `gantt.filter.${projectId}`;
@@ -206,7 +214,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   };
   const today = startOfDay(new Date());
 
-  const ZOOM_MIN = 2;
+  const ZOOM_MIN = 1;
   const ZOOM_MAX = 280;
   const [dayWidth, setDayWidth] = useState(DAY_WIDTH);
   const dayWidthRef = useRef(dayWidth);
@@ -230,7 +238,8 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   const effectiveDays = Math.max(baseDays, Math.ceil(viewportWidth / dayWidth));
 
   // Compressed off-day width: weekends/holidays take minimal horizontal space.
-  const offWidth = Math.max(4, Math.round(dayWidth * 0.22));
+  // Floor 2 (not 4) so 4yr+ projects can fit-to-viewport at low zoom.
+  const offWidth = Math.max(2, Math.round(dayWidth * 0.22));
   const axis = useMemo(
     () => buildDayAxis(viewStart, effectiveDays, dayWidth, offWidth, calendar),
     [viewStart, effectiveDays, dayWidth, offWidth, calendar],
@@ -244,6 +253,41 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     const todayX = axisRef.current.xOf(diffDays(today, viewStart));
     scrollRef.current.scrollLeft = Math.max(0, todayX - 200);
   }, [viewStart.getTime()]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fit-to-project on first open: pick dayWidth so the full project span fits
+  // viewport, then scroll to project start. Runs once viewport+items ready.
+  const fitInitRef = useRef(false);
+  const pendingFitScroll = useRef<{ dayIndex: number } | null>(null);
+  useEffect(() => {
+    if (fitInitRef.current) return;
+    if (viewportWidth === 0 || workItems.length === 0) return;
+    fitInitRef.current = true;
+    let work = 0, off = 0;
+    for (let i = 0; i < range.days; i++) {
+      if (isWorkingDay(addDays(range.start, i), calendar)) work++;
+      else off++;
+    }
+    const target = viewportWidth * 0.92;
+    // Binary search: largest dayWidth where work*dw + off*max(2, round(dw*0.22)) <= target.
+    let lo = ZOOM_MIN, hi = ZOOM_MAX;
+    for (let i = 0; i < 32; i++) {
+      const mid = (lo + hi) / 2;
+      const ow = Math.max(2, Math.round(mid * 0.22));
+      const t = work * mid + off * ow;
+      if (t <= target) lo = mid; else hi = mid;
+    }
+    const dw = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, lo));
+    pendingFitScroll.current = { dayIndex: diffDays(range.start, viewStart) };
+    setDayWidth(dw);
+  }, [viewportWidth, workItems.length, range.days, range.start, calendar, viewStart]);
+
+  // Apply pending fit-scroll after the new axis is laid out (overrides today-center).
+  useLayoutEffect(() => {
+    const p = pendingFitScroll.current;
+    if (!p || !scrollRef.current) return;
+    pendingFitScroll.current = null;
+    scrollRef.current.scrollLeft = Math.max(0, axis.xOf(p.dayIndex) - 40);
+  }, [axis]);
 
   // Day (with sub-day fraction) to re-pin under the cursor after a zoom; applied
   // in useLayoutEffect below so it lands before paint (no flash/clamp jump).

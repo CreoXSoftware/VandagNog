@@ -18,10 +18,14 @@ interface Props {
   onChange: (v: string | null) => void;
 }
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_RE = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;
 
 function normalize(v: string): string {
-  return v.trim().replace(/\//g, '-');
+  const trimmed = v.trim().replace(/\//g, '-');
+  const m = DATE_RE.exec(trimmed);
+  if (!m) return trimmed;
+  const [, y, mo, d] = m;
+  return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`;
 }
 
 export function WorkingDayPicker({
