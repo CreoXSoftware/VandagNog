@@ -14,7 +14,7 @@ import { TaskTargetPicker, labelForTarget } from './TaskTargetPicker';
 import { formatHMS } from '@/lib/timeFormat';
 import type { TrackerTarget } from '@/types/db';
 
-const POS_KEY = 'vn.tracker.widget.pos';
+const POS_KEY = 'vn.tracker.widget.pos.v2';
 const COLLAPSED_KEY = 'vn.tracker.widget.collapsed';
 const TARGET_KEY = 'vn.tracker.widget.target';
 

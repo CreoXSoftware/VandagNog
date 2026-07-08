@@ -266,12 +266,43 @@ $$;
 grant execute on function public.my_visible_clients() to authenticated;
 
 -- 7. Project-side display ------------------------------------------
+-- Owner display name resolver: name from user_settings, else the email prefix.
+-- SECURITY DEFINER so it can read auth.users + user_settings regardless of caller
+-- RLS. Keeping auth.users out of the view itself is what clears the
+-- auth_users_exposed linter (0002) - a view referencing auth.users leaks it to the
+-- API roles.
+--
+-- authenticated MUST keep EXECUTE: Postgres checks EXECUTE on functions used inside
+-- a view against the *caller*, not the view owner (only table access uses the view
+-- owner). Revoking it from authenticated makes `select * from project_client_view`
+-- fail with "permission denied for function user_display_name" for every signed-in
+-- user. anon/PUBLIC stay stripped (advisor 0028). Trade-off: because it lives in the
+-- PostgREST-exposed public schema, authenticated can also call it directly as an RPC
+-- (uuid -> display name / email-prefix); acceptable for in-org use.
+create or replace function public.user_display_name(p_user_id uuid)
+returns text
+language sql stable security definer set search_path = public as $$
+  select coalesce(
+    nullif(trim(concat_ws(' ', s.first_name, s.last_name)), ''),
+    split_part(u.email::text, '@', 1)
+  )
+  from auth.users u
+  left join public.user_settings s on s.user_id = u.id
+  where u.id = p_user_id
+$$;
+
+-- Supabase auto-grants EXECUTE to anon/authenticated on new public functions, so
+-- revoking from PUBLIC alone is not enough - strip PUBLIC + anon, keep authenticated.
+revoke all on function public.user_display_name(uuid) from public, anon;
+grant execute on function public.user_display_name(uuid) to authenticated;
+
 -- Read-only view for project members to see a linked client's name and a
 -- human-readable scope label, even when the project member cannot otherwise
 -- see the client (private of someone else, or team they're not in).
 drop view if exists public.project_client_view;
--- Definer view: needs to read auth.users for owner display_name. Caller-visibility
--- is gated by the EXISTS on project_members below.
+-- Definer view: caller-visibility is gated by the EXISTS on project_members below.
+-- Owner display name comes from user_display_name() so the view never references
+-- auth.users directly.
 create view public.project_client_view as
 select
   p.id as project_id,
@@ -281,15 +312,10 @@ select
   c.team_id,
   t.name as team_name,
   c.owner_user_id,
-  coalesce(
-    nullif(trim(concat_ws(' ', s.first_name, s.last_name)), ''),
-    split_part(u.email::text, '@', 1)
-  ) as owner_display_name
+  public.user_display_name(c.owner_user_id) as owner_display_name
 from public.projects p
 join public.clients c on c.id = p.client_id and c.deleted_at is null
 left join public.teams t on t.id = c.team_id
-left join auth.users u on u.id = c.owner_user_id
-left join public.user_settings s on s.user_id = c.owner_user_id
 where exists (
   select 1 from public.project_members pm
    where pm.project_id = p.id and pm.user_id = auth.uid()

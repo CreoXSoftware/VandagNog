@@ -20,6 +20,7 @@ import { TeamPage } from '@/routes/team';
 import { ClientsListPage } from '@/routes/clients';
 import { TrackerPage } from '@/routes/tracker';
 import { TrackerReportsPage } from '@/routes/trackerReports';
+import { WorkloadPage } from '@/routes/workload';
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -119,6 +120,12 @@ const trackerReportsRoute = createRoute({
   component: TrackerReportsPage,
 });
 
+const workloadRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/workload',
+  component: WorkloadPage,
+});
+
 interface ProjectSearch {
   item?: string;
   view?: 'gantt' | 'calendar' | 'members';
@@ -140,7 +147,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   authCallbackRoute,
   inviteRoute,
-  appLayoutRoute.addChildren([indexRoute, projectsListRoute, profileRoute, projectRoute, teamsListRoute, teamRoute, clientsListRoute, trackerRoute, trackerReportsRoute]),
+  appLayoutRoute.addChildren([indexRoute, projectsListRoute, profileRoute, projectRoute, teamsListRoute, teamRoute, clientsListRoute, trackerRoute, trackerReportsRoute, workloadRoute]),
 ]);
 
 export function createAppRouter(queryClient: QueryClient) {

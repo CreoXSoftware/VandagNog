@@ -15,7 +15,7 @@ import { EditProjectDialog } from '@/components/project/EditProjectDialog';
 import { ProjectSummary } from '@/components/project/ProjectSummary';
 import { ProjectExportMenu } from '@/components/project/ProjectExportMenu';
 import { ProjectClientField } from '@/components/client/ProjectClientField';
-import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/Tooltip';
+import { ProjectSwitcher } from '@/components/project/ProjectSwitcher';
 import { cn } from '@/lib/utils';
 import type { ProjectRole } from '@/types/db';
 import { useT, type TKey } from '@/lib/i18n';
@@ -63,18 +63,7 @@ export function ProjectPage() {
   return (
     <div className="h-full flex flex-col">
       <div className="relative h-12 px-4 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 flex items-center gap-3 shrink-0">
-        {project.description ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="font-medium text-sm cursor-help">{project.name}</div>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="max-w-sm whitespace-pre-wrap">
-              {project.description}
-            </TooltipContent>
-          </Tooltip>
-        ) : (
-          <div className="font-medium text-sm">{project.name}</div>
-        )}
+        <ProjectSwitcher currentProjectId={projectId} name={project.name} description={project.description} />
         {project.description && (
           <div className="text-xs text-neutral-500 dark:text-neutral-400 truncate max-w-md">{project.description}</div>
         )}
@@ -121,6 +110,7 @@ export function ProjectPage() {
       <div className="flex-1 overflow-hidden">
         {view === 'gantt' && (
           <GanttView
+            key={projectId}
             projectId={projectId}
             workItems={workItems}
             dependencies={dependencies}
