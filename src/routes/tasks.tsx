@@ -213,9 +213,9 @@ export function TasksPage() {
     for (const p of data.projects) {
       if (projectSet.size > 0 && !projectSet.has(p.id)) continue;
       const rows = byProject.get(p.id) ?? [];
-      // By default every project you can see gets a group, even with nothing in
-      // scope — that is what keeps its quick-add row reachable. Turning this on
-      // trades that away for a shorter list.
+      // Default: only projects with something in scope. Turning this off shows
+      // every project you can see, which is how you reach the quick-add row of a
+      // project that has nothing scheduled.
       if (hideEmpty && rows.length === 0) continue;
 
       rows.sort((a, b) => {

@@ -235,7 +235,7 @@ export const en = {
     showDone: 'Show done',
     hideEmpty: 'Active projects only',
     hideEmptyHint:
-      'Hide projects with nothing in the selected time scope. Off by default, so every project keeps its quick-add row.',
+      'Hides projects with nothing in the selected time scope. Turn it off to see every project, including empty ones, each with its quick-add row.',
     mineOnly: 'Only mine',
     assignedToMe: 'Assigned to you',
     loadError: 'Could not load tasks.',

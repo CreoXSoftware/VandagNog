@@ -237,7 +237,7 @@ export const af: Dict = {
     showDone: 'Wys klaar',
     hideEmpty: 'Slegs aktiewe projekte',
     hideEmptyHint:
-      'Versteek projekte met niks in die gekose tydbestek nie. Standaard af, sodat elke projek sy vinnig-byvoeg-ry behou.',
+      'Versteek projekte met niks in die gekose tydbestek nie. Skakel dit af om elke projek te sien, ook leë projekte, elk met sy vinnig-byvoeg-ry.',
     mineOnly: 'Net myne',
     assignedToMe: 'Aan jou toegewys',
     loadError: 'Kon nie take laai nie.',
