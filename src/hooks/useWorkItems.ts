@@ -7,8 +7,30 @@ import { markLocalWorkItemMutation } from '@/lib/localMutationGuard';
 import { dependenciesKey } from './useDependencies';
 import { nonWorkingDaysKey } from './useNonWorkingDays';
 import { projectKey } from './useProjects';
+import { tasksDataKey, type TasksData } from './useTasksData';
+import { collectSubtreeIds } from '@/lib/workItemTree';
 
 export const workItemsKey = (projectId: string) => ['work_items', projectId] as const;
+
+// The global Tasks page holds every work item in one cache entry, so a
+// project-scoped mutation has to patch it too or the row won't move until the
+// next refetch. These helpers keep that cache in step without making the
+// mutations depend on the page being mounted (they no-op when it isn't).
+function patchTasksCache(
+  qc: ReturnType<typeof useQueryClient>,
+  apply: (items: WorkItem[]) => WorkItem[],
+): TasksData | undefined {
+  const prev = qc.getQueryData<TasksData>(tasksDataKey);
+  if (prev) qc.setQueryData<TasksData>(tasksDataKey, { ...prev, items: apply(prev.items) });
+  return prev;
+}
+
+function restoreTasksCache(
+  qc: ReturnType<typeof useQueryClient>,
+  prev: TasksData | undefined,
+): void {
+  if (prev) qc.setQueryData<TasksData>(tasksDataKey, prev);
+}
 
 export function useWorkItems(projectId: string | undefined) {
   return useQuery({
@@ -29,6 +51,10 @@ export function useWorkItems(projectId: string | undefined) {
 }
 
 export interface CreateWorkItemInput {
+  // Optional client-generated uuid. Supplying it lets an optimistic row use the
+  // same id the server will store, so the real row replaces it seamlessly and
+  // the provisional row is clickable straight away.
+  id?: string;
   project_id: string;
   parent_id: string | null;
   name: string;
@@ -39,6 +65,9 @@ export interface CreateWorkItemInput {
   duration_days?: number | null;
   progress?: number;
   position?: number;
+  // Must be a member of the project — the enforce_assignee_membership trigger
+  // rejects anyone else.
+  assignee_id?: string | null;
 }
 
 export function useCreateWorkItem() {
@@ -51,6 +80,7 @@ export function useCreateWorkItem() {
       const { data, error } = await supabase
         .from('work_items')
         .insert({
+          ...(input.id ? { id: input.id } : {}),
           project_id: input.project_id,
           parent_id: input.parent_id,
           name: input.name,
@@ -61,6 +91,7 @@ export function useCreateWorkItem() {
           duration_days: input.duration_days ?? null,
           progress: input.progress ?? 0,
           position: input.position ?? 0,
+          assignee_id: input.assignee_id ?? null,
           created_by: userId,
         })
         .select()
@@ -68,8 +99,49 @@ export function useCreateWorkItem() {
       if (error) throw error;
       return data as WorkItem;
     },
-    onSuccess: (data) => qc.invalidateQueries({ queryKey: workItemsKey(data.project_id) }),
+    // Only optimistic when the caller supplied an id: without one the server
+    // picks the uuid, so a provisional row could not be reconciled and would
+    // flicker as a duplicate when the refetch lands.
+    onMutate: async (input) => {
+      if (!input.id) return { prevTasks: undefined };
+      markLocalWorkItemMutation();
+      await qc.cancelQueries({ queryKey: tasksDataKey });
+      const optimistic = provisionalWorkItem(input, input.id);
+      const prevTasks = patchTasksCache(qc, (items) => [...items, optimistic]);
+      return { prevTasks };
+    },
+    onError: (_e, _input, ctx) => restoreTasksCache(qc, ctx?.prevTasks),
+    onSettled: (data, _e, input) => {
+      qc.invalidateQueries({ queryKey: workItemsKey(data?.project_id ?? input.project_id) });
+      qc.invalidateQueries({ queryKey: tasksDataKey });
+    },
   });
+}
+
+// A stand-in row shaped like what the server will return. level is 0 because
+// optimistic creates are always root-level (see QuickAddRow); the DB trigger
+// owns the real value and the refetch corrects anything that differs.
+function provisionalWorkItem(input: CreateWorkItemInput, id: string): WorkItem {
+  const now = new Date().toISOString();
+  return {
+    id,
+    project_id: input.project_id,
+    parent_id: input.parent_id,
+    level: 0,
+    name: input.name,
+    description: input.description ?? null,
+    deliverable: input.deliverable ?? null,
+    start_date: input.start_date ?? null,
+    end_date: input.end_date ?? null,
+    duration_days: input.duration_days ?? null,
+    progress: input.progress ?? 0,
+    assignee_id: input.assignee_id ?? null,
+    position: input.position ?? 0,
+    created_by: '',
+    created_at: now,
+    updated_at: now,
+    deleted_at: null,
+  };
 }
 
 export function useUpdateWorkItem() {
@@ -86,20 +158,28 @@ export function useUpdateWorkItem() {
       return data as WorkItem;
     },
     onMutate: async (input) => {
-      await qc.cancelQueries({ queryKey: workItemsKey(input.project_id) });
+      markLocalWorkItemMutation();
+      await Promise.all([
+        qc.cancelQueries({ queryKey: workItemsKey(input.project_id) }),
+        qc.cancelQueries({ queryKey: tasksDataKey }),
+      ]);
+      const apply = (wi: WorkItem) =>
+        wi.id === input.id ? ({ ...wi, ...input.patch } as WorkItem) : wi;
+
       const prev = qc.getQueryData<WorkItem[]>(workItemsKey(input.project_id));
-      if (prev) {
-        qc.setQueryData<WorkItem[]>(
-          workItemsKey(input.project_id),
-          prev.map((wi) => (wi.id === input.id ? { ...wi, ...input.patch } as WorkItem : wi)),
-        );
-      }
-      return { prev };
+      if (prev) qc.setQueryData<WorkItem[]>(workItemsKey(input.project_id), prev.map(apply));
+      const prevTasks = patchTasksCache(qc, (items) => items.map(apply));
+
+      return { prev, prevTasks };
     },
     onError: (_e, input, ctx) => {
       if (ctx?.prev) qc.setQueryData(workItemsKey(input.project_id), ctx.prev);
+      restoreTasksCache(qc, ctx?.prevTasks);
     },
-    onSettled: (_d, _e, input) => qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) }),
+    onSettled: (_d, _e, input) => {
+      qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) });
+      qc.invalidateQueries({ queryKey: tasksDataKey });
+    },
   });
 }
 
@@ -157,7 +237,23 @@ export function useDeleteWorkItem() {
       const { error } = await supabase.rpc('soft_delete_work_item', { p_id: input.id });
       if (error) throw error;
     },
-    onSuccess: (_d, input) => qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) }),
+    // The RPC is recursive, so drop the whole subtree optimistically — otherwise
+    // children linger on screen until the refetch lands.
+    onMutate: async (input) => {
+      markLocalWorkItemMutation();
+      await qc.cancelQueries({ queryKey: tasksDataKey });
+      const prevTasks = patchTasksCache(qc, (items) => {
+        const doomed = collectSubtreeIds(items, input.id);
+        return items.filter((w) => !doomed.has(w.id));
+      });
+      return { prevTasks };
+    },
+    onError: (_e, _input, ctx) => restoreTasksCache(qc, ctx?.prevTasks),
+    onSettled: (_d, _e, input) => {
+      qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) });
+      qc.invalidateQueries({ queryKey: dependenciesKey(input.project_id) });
+      qc.invalidateQueries({ queryKey: tasksDataKey });
+    },
   });
 }
 
@@ -168,7 +264,10 @@ export function useRestoreWorkItem() {
       const { error } = await supabase.rpc('restore_work_item', { p_id: input.id });
       if (error) throw error;
     },
-    onSuccess: (_d, input) => qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) }),
+    onSuccess: (_d, input) => {
+      qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) });
+      qc.invalidateQueries({ queryKey: tasksDataKey });
+    },
   });
 }
 
@@ -191,7 +290,7 @@ export function useRescheduleFrom() {
       ]);
       const prev = qc.getQueryData<WorkItem[]>(workItemsKey(input.project_id));
       const prevDeps = qc.getQueryData<Dependency[]>(dependenciesKey(input.project_id)) ?? [];
-      if (!prev) return { prev, prevDeps };
+      if (!prev) return { prev, prevDeps, prevTasks: undefined };
 
       const project = qc.getQueryData<Project>(projectKey(input.project_id));
       const nonWorking = qc.getQueryData<NonWorkingDay[]>(nonWorkingDaysKey(input.project_id)) ?? [];
@@ -206,19 +305,23 @@ export function useRescheduleFrom() {
         calendar,
       });
 
-      qc.setQueryData<WorkItem[]>(
-        workItemsKey(input.project_id),
-        prev.map((wi) => {
-          const p = result.patches.get(wi.id);
-          return p ? ({ ...wi, ...p } as WorkItem) : wi;
-        }),
-      );
+      const applyCascade = (wi: WorkItem) => {
+        const p = result.patches.get(wi.id);
+        return p ? ({ ...wi, ...p } as WorkItem) : wi;
+      };
 
-      return { prev, prevDeps };
+      qc.setQueryData<WorkItem[]>(workItemsKey(input.project_id), prev.map(applyCascade));
+      // Same patch set on the global cache, so a date edited from the Tasks page
+      // moves there too. The cascade is authoritative (it mirrors the server), so
+      // like the project cache this is deliberately not invalidated afterwards.
+      const prevTasks = patchTasksCache(qc, (items) => items.map(applyCascade));
+
+      return { prev, prevDeps, prevTasks };
     },
     onError: (_e, input, ctx) => {
       if (ctx?.prev) qc.setQueryData(workItemsKey(input.project_id), ctx.prev);
       if (ctx?.prevDeps) qc.setQueryData(dependenciesKey(input.project_id), ctx.prevDeps);
+      restoreTasksCache(qc, ctx?.prevTasks);
     },
     onSuccess: () => {
       markLocalWorkItemMutation();

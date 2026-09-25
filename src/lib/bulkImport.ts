@@ -1,4 +1,4 @@
-import type { Dependency, DependencyType, WorkItem } from '@/types/db';
+import type { DependencyType } from '@/types/db';
 import { parseDate, snapBackward, snapForward, toDateString, type WorkCalendar } from '@/components/gantt/ganttUtils';
 import { endDateFromStartAndDuration } from '@/lib/duration';
 
@@ -20,10 +20,25 @@ export interface ImportTask {
   end_date?: string | null;
   duration_days?: number | null;
   progress?: number | null;
+  /** Assignee uuid. Wins over assignee_name when both are given. */
+  assignee_id?: string | null;
+  /** Assignee display name, resolved against the project's members. */
+  assignee_name?: string | null;
   predecessors?: ImportDepRef[];
   successors?: ImportDepRef[];
   children?: ImportTask[];
 }
+
+/** Fields a document can set on a task, for presence tracking. */
+export type ImportField =
+  | 'name'
+  | 'description'
+  | 'deliverable'
+  | 'start_date'
+  | 'end_date'
+  | 'duration_days'
+  | 'progress'
+  | 'assignee';
 
 export interface ImportDoc {
   version: number;
@@ -41,8 +56,15 @@ export interface FlatTask {
   end_date: string | null;
   duration_days: number | null;
   progress: number;
+  assignee_id: string | null;
+  assignee_name: string | null;
   predecessors: ImportDepRef[];
   successors: ImportDepRef[];
+  // Which fields the document actually carried. An absent field means "leave
+  // this alone"; a field present-but-null means "clear it". Without this an
+  // update would wipe every parent's dates, because the exporter deliberately
+  // omits them (they roll up from children).
+  present: Set<ImportField>;
 }
 
 export type ParseResult =
@@ -67,8 +89,6 @@ export function parseAndValidateImport(text: string): ParseResult {
     return { ok: false, errors: [`Invalid JSON: ${(e as Error).message}`] };
   }
 
-  const errors: string[] = [];
-
   if (!isPlainObject(parsed)) {
     return { ok: false, errors: ['Document must be a JSON object with a "tasks" array.'] };
   }
@@ -80,6 +100,18 @@ export function parseAndValidateImport(text: string): ParseResult {
     return { ok: false, errors: ['"tasks" array is empty.'] };
   }
 
+  return parseAndValidateTasks(tasks);
+}
+
+// Validates a single `tasks` array and flattens it to a DFS-ordered list where
+// every parent precedes its children.
+//
+// Temp ids and dependency refs are scoped to this one array, so a multi-project
+// document validates each project independently — two projects may reuse the
+// same temp id without colliding, and a dependency can never cross projects
+// (which the `deps_enforce` trigger would reject anyway).
+export function parseAndValidateTasks(tasks: unknown[], pathPrefix = 'tasks'): ParseResult {
+  const errors: string[] = [];
   const flat: FlatTask[] = [];
   const usedIds = new Set<string>();
   let autoCounter = 0;
@@ -162,6 +194,33 @@ export function parseAndValidateImport(text: string): ParseResult {
       }
     }
 
+    let assignee_id: string | null = null;
+    if (node.assignee_id != null) {
+      if (typeof node.assignee_id !== 'string' || node.assignee_id.trim() === '') {
+        errors.push(`${path}.assignee_id: must be a non-empty string`);
+      } else {
+        assignee_id = node.assignee_id.trim();
+      }
+    }
+    let assignee_name: string | null = null;
+    if (node.assignee_name != null) {
+      if (typeof node.assignee_name !== 'string') {
+        errors.push(`${path}.assignee_name: must be string`);
+      } else if (node.assignee_name.trim() !== '') {
+        assignee_name = node.assignee_name.trim();
+      }
+    }
+
+    const present = new Set<ImportField>();
+    if (node.name !== undefined) present.add('name');
+    if (node.description !== undefined) present.add('description');
+    if (node.deliverable !== undefined) present.add('deliverable');
+    if (node.start_date !== undefined) present.add('start_date');
+    if (node.end_date !== undefined) present.add('end_date');
+    if (node.duration_days !== undefined) present.add('duration_days');
+    if (node.progress !== undefined) present.add('progress');
+    if (node.assignee_id !== undefined || node.assignee_name !== undefined) present.add('assignee');
+
     const predecessors = validateDepArray(node.predecessors, `${path}.predecessors`, errors);
     const successors = validateDepArray(node.successors, `${path}.successors`, errors);
 
@@ -176,8 +235,11 @@ export function parseAndValidateImport(text: string): ParseResult {
       end_date,
       duration_days,
       progress,
+      assignee_id,
+      assignee_name,
       predecessors,
       successors,
+      present,
     });
 
     if (Array.isArray(node.children)) {
@@ -189,7 +251,7 @@ export function parseAndValidateImport(text: string): ParseResult {
   }
 
   tasks.forEach((t, i) => {
-    walk(t, `tasks[${i}]`, null, i);
+    walk(t, `${pathPrefix}[${i}]`, null, i);
   });
 
   validateDepReferences(flat, errors);
@@ -322,6 +384,7 @@ export interface ImportArgs {
     duration_days?: number | null;
     progress?: number;
     position?: number;
+    assignee_id?: string | null;
   }) => Promise<{ id: string }>;
   createDependency: (input: {
     project_id: string;
@@ -334,13 +397,34 @@ export interface ImportArgs {
   // created. Replaces a per-source rescheduleFrom loop, which would reset
   // each source's dates and overwrite cascade results from earlier calls.
   rescheduleProject: () => Promise<void>;
+  // Temp id -> existing work-item uuid, for tasks the caller has already matched
+  // against the database. Lets a partial import attach new children to parents
+  // that are already there, and wire dependencies to existing items, instead of
+  // re-creating the whole tree. Entries here are never inserted.
+  seedIdMap?: Map<string, string>;
+  // Temp ids to leave alone entirely — e.g. tasks the caller could not match
+  // unambiguously. Their descendants are skipped too, since a child whose
+  // parent was never created would otherwise be inserted as a root.
+  skipTempIds?: Set<string>;
+  // Dependency edges already present in the database, keyed `predecessorId|successorId`.
+  // Matches the unique index on (predecessor_id, successor_id), so re-importing a
+  // document skips edges that are already there instead of throwing.
+  existingDepKeys?: Set<string>;
 }
 
 export async function importTaskTree(args: ImportArgs): Promise<{ tasks: number; deps: number }> {
   const { projectId, flat, calendar, createWorkItem, createDependency, rescheduleProject } = args;
-  const idMap = new Map<string, string>();
+  const idMap = new Map<string, string>(args.seedIdMap ?? []);
+  let created = 0;
 
   for (const t of flat) {
+    // Already in the database (resolved by the caller) — don't insert a copy.
+    if (args.seedIdMap?.has(t.tempId)) continue;
+    if (args.skipTempIds?.has(t.tempId)) continue;
+    // Parent was skipped, so this row has nowhere to attach. flat is DFS-ordered
+    // (a parent always precedes its children), so an unresolved parent here can
+    // only mean it was deliberately skipped — never a missing lookup.
+    if (t.parentTempId && !idMap.has(t.parentTempId)) continue;
     let start = t.start_date;
     if (start) {
       const d = parseDate(start);
@@ -359,7 +443,7 @@ export async function importTaskTree(args: ImportArgs): Promise<{ tasks: number;
       dur = t.duration_days;
     }
     const parent_id = t.parentTempId ? (idMap.get(t.parentTempId) ?? null) : null;
-    const created = await createWorkItem({
+    const row = await createWorkItem({
       project_id: projectId,
       parent_id,
       name: t.name,
@@ -370,13 +454,19 @@ export async function importTaskTree(args: ImportArgs): Promise<{ tasks: number;
       duration_days: dur,
       progress: t.progress,
       position: t.position,
+      assignee_id: t.assignee_id,
     });
-    idMap.set(t.tempId, created.id);
+    idMap.set(t.tempId, row.id);
+    created += 1;
   }
 
+  // Edges already in the database, keyed pred|succ to match the unique index on
+  // (predecessor_id, successor_id) — inserting a duplicate would throw.
+  const existing = args.existingDepKeys ?? new Set<string>();
   const depKeys = new Set<string>();
   let depCount = 0;
   function recordDep(predId: string, succId: string, type: DependencyType): boolean {
+    if (existing.has(`${predId}|${succId}`)) return false;
     const key = `${predId}|${succId}|${type}`;
     if (depKeys.has(key)) return false;
     depKeys.add(key);
@@ -420,5 +510,5 @@ export async function importTaskTree(args: ImportArgs): Promise<{ tasks: number;
   // rollups. Replaces a per-source loop that would revert moved sources.
   await rescheduleProject();
 
-  return { tasks: flat.length, deps: depCount };
+  return { tasks: created, deps: depCount };
 }

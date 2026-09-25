@@ -1,19 +1,13 @@
-import { useMemo, useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { Plus, Upload, ClipboardCopy } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import type { WorkItem } from '@/types/db';
-import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/Button';
-import { useCreateWorkItem, workItemsKey } from '@/hooks/useWorkItems';
-import { useCreateDependency, dependenciesKey } from '@/hooks/useDependencies';
-import { useProject } from '@/hooks/useProjects';
-import { useNonWorkingDays } from '@/hooks/useNonWorkingDays';
-import { buildCalendar } from '@/components/gantt/ganttUtils';
+import { useCreateWorkItem } from '@/hooks/useWorkItems';
 import { useT } from '@/lib/i18n';
 import { levelLabel } from '@/lib/levels';
-import { parseAndValidateImport, importTaskTree } from '@/lib/bulkImport';
-import { buildTemplateClipboardText } from '@/lib/bulkImportTemplate';
+import { JsonSyncPanel } from '@/components/tasks/JsonSyncPanel';
+import { useTasksData } from '@/hooks/useTasksData';
 
 interface ParsedLine {
   depth: number;
@@ -53,18 +47,12 @@ type Mode = 'outline' | 'json';
 
 export function QuickAddPanel({ projectId, selected, onClose, onLastCreated }: Props) {
   const t = useT();
-  const qc = useQueryClient();
   const create = useCreateWorkItem();
-  const createDep = useCreateDependency();
-  const { data: project } = useProject(projectId);
-  const { data: nonWorking } = useNonWorkingDays(projectId);
+  const { data: tasksData } = useTasksData();
 
   const [mode, setMode] = useState<Mode>('outline');
   const [text, setText] = useState('');
-  const [jsonText, setJsonText] = useState('');
-  const [jsonErrors, setJsonErrors] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const scope = useMemo(() => {
     if (selected) {
@@ -103,87 +91,6 @@ export function QuickAddPanel({ projectId, selected, onClose, onLastCreated }: P
     } finally {
       setBusy(false);
     }
-  }
-
-  async function submitJson() {
-    if (!jsonText.trim()) {
-      toast.error(t('workItem.quickAddJsonEmpty'));
-      return;
-    }
-    const result = parseAndValidateImport(jsonText);
-    if (!result.ok) {
-      setJsonErrors(result.errors);
-      return;
-    }
-    setJsonErrors([]);
-    setBusy(true);
-    try {
-      const calendar = buildCalendar(project?.working_days ?? [1, 2, 3, 4, 5], nonWorking ?? []);
-      let lastId: string | null = null;
-      const summary = await importTaskTree({
-        projectId,
-        flat: result.flat,
-        calendar,
-        createWorkItem: async (input) => {
-          const r = await create.mutateAsync(input);
-          lastId = r.id;
-          return { id: r.id };
-        },
-        createDependency: async (input) => {
-          return createDep.mutateAsync(input);
-        },
-        rescheduleProject: async () => {
-          const { error } = await supabase.rpc('reschedule_project', {
-            p_project_id: projectId,
-          });
-          if (error) throw error;
-        },
-      });
-      // Scheduling ran via direct RPC (bypassing the optimistic cache); refetch
-      // the authoritative state so the Gantt reflects the cascaded positions.
-      await Promise.all([
-        qc.invalidateQueries({ queryKey: workItemsKey(projectId) }),
-        qc.invalidateQueries({ queryKey: dependenciesKey(projectId) }),
-      ]);
-      toast.success(t('workItem.quickAddJsonImported', { tasks: summary.tasks, deps: summary.deps }));
-      setJsonText('');
-      if (lastId) onLastCreated(lastId);
-      onClose();
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function copyTemplate() {
-    const payload = buildTemplateClipboardText();
-    try {
-      await navigator.clipboard.writeText(payload);
-      toast.success(t('workItem.quickAddTemplateCopied'));
-    } catch {
-      const ta = document.createElement('textarea');
-      ta.value = payload;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-      toast.success(t('workItem.quickAddTemplateCopied'));
-    }
-  }
-
-  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    e.target.value = '';
-    if (!f) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const v = typeof reader.result === 'string' ? reader.result : '';
-      setJsonText(v);
-      setJsonErrors([]);
-    };
-    reader.onerror = () => toast.error((reader.error as Error)?.message ?? 'Failed to read file');
-    reader.readAsText(f);
   }
 
   const scopeLabel = selected && scope.parentId
@@ -299,58 +206,12 @@ export function QuickAddPanel({ projectId, selected, onClose, onLastCreated }: P
             </Button>
           </div>
         </>
+      ) : tasksData ? (
+        // Exactly the same engine the Tasks page uses: duplicate detection,
+        // in-place updates and removals, locked to this project.
+        <JsonSyncPanel data={tasksData} lockedProjectId={projectId} onDone={onClose} />
       ) : (
-        <>
-          <div className="text-xs text-neutral-600 dark:text-neutral-400">
-            {t('workItem.quickAddJsonScopeNote')}
-          </div>
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="ghost" onClick={copyTemplate} disabled={busy}>
-              <ClipboardCopy size={14} /> {t('workItem.quickAddCopyTemplate')}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => fileInputRef.current?.click()} disabled={busy}>
-              <Upload size={14} /> {t('workItem.quickAddJsonFromFile')}
-            </Button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".json,application/json"
-              onChange={onPickFile}
-              className="hidden"
-            />
-          </div>
-          <textarea
-            value={jsonText}
-            onChange={(e) => {
-              setJsonText(e.target.value);
-              if (jsonErrors.length > 0) setJsonErrors([]);
-            }}
-            placeholder={t('workItem.quickAddJsonPlaceholder')}
-            rows={14}
-            spellCheck={false}
-            className="w-full font-mono text-xs rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 p-2 focus:outline-none focus:ring-2 focus:ring-neutral-400 dark:focus:ring-neutral-500 whitespace-pre"
-          />
-          {jsonErrors.length > 0 && (
-            <div className="rounded border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 p-2 space-y-1">
-              <div className="text-xs font-medium text-red-700 dark:text-red-300">
-                {t('workItem.quickAddJsonErrors')}
-              </div>
-              <ul className="text-xs text-red-700 dark:text-red-300 list-disc pl-4 max-h-40 overflow-auto">
-                {jsonErrors.map((err, i) => (
-                  <li key={i} className="font-mono">{err}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <div className="flex items-center justify-end gap-2">
-            <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>
-              {t('workItem.quickAddHide')}
-            </Button>
-            <Button size="sm" onClick={submitJson} disabled={busy}>
-              <Plus size={14} /> {t('workItem.quickAddJsonImport')}
-            </Button>
-          </div>
-        </>
+        <div className="text-xs text-neutral-500 dark:text-neutral-400">{t('common.loading')}</div>
       )}
     </div>
   );

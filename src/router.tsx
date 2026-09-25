@@ -21,6 +21,8 @@ import { ClientsListPage } from '@/routes/clients';
 import { TrackerPage } from '@/routes/tracker';
 import { TrackerReportsPage } from '@/routes/trackerReports';
 import { WorkloadPage } from '@/routes/workload';
+import { TasksPage } from '@/routes/tasks';
+import { isTimeFilter, type TimeFilter } from '@/lib/tasksFilter';
 
 interface RouterContext {
   queryClient: QueryClient;
@@ -126,6 +128,21 @@ const workloadRoute = createRoute({
   component: WorkloadPage,
 });
 
+interface TasksSearch {
+  when?: TimeFilter;
+  item?: string;
+}
+
+const tasksRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/tasks',
+  validateSearch: (s: Record<string, unknown>): TasksSearch => ({
+    when: isTimeFilter(s.when) ? s.when : undefined,
+    item: typeof s.item === 'string' ? s.item : undefined,
+  }),
+  component: TasksPage,
+});
+
 interface ProjectSearch {
   item?: string;
   view?: 'gantt' | 'calendar' | 'members';
@@ -147,7 +164,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   authCallbackRoute,
   inviteRoute,
-  appLayoutRoute.addChildren([indexRoute, projectsListRoute, profileRoute, projectRoute, teamsListRoute, teamRoute, clientsListRoute, trackerRoute, trackerReportsRoute, workloadRoute]),
+  appLayoutRoute.addChildren([indexRoute, tasksRoute, projectsListRoute, profileRoute, projectRoute, teamsListRoute, teamRoute, clientsListRoute, trackerRoute, trackerReportsRoute, workloadRoute]),
 ]);
 
 export function createAppRouter(queryClient: QueryClient) {
