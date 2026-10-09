@@ -3,6 +3,7 @@ import { Moon, Sun } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { signOut, useAuth } from '@/hooks/useAuth';
 import { NotificationBell } from './NotificationBell';
+import { HelpButton } from './HelpButton';
 import { Avatar } from '@/components/ui/Avatar';
 import { useProfile } from '@/hooks/useProfile';
 import { displayName } from '@/lib/userDisplay';
@@ -33,6 +34,7 @@ export function Header() {
         <img src={theme === 'dark' ? logoDark : logoLight} alt={t('app.name')} className="h-10 w-auto rounded-md" />
       </Link>
       <nav className="flex-1" />
+      <HelpButton />
       <select
         value={lang}
         onChange={(e) => setLang(e.target.value as Lang)}

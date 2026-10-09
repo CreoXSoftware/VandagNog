@@ -4,6 +4,7 @@
 // how bulkExport promotes orphans).
 
 import type { WorkItem } from '@/types/db';
+import { siblingCompare } from '@/lib/levels';
 
 export function indexById(items: WorkItem[]): Map<string, WorkItem> {
   return new Map(items.map((w) => [w.id, w]));
@@ -82,4 +83,83 @@ export function topmostIds(items: WorkItem[], ids: Iterable<string>): string[] {
     if (!covered) out.push(id);
   }
   return out;
+}
+
+export interface ReparentUpdate {
+  id: string;
+  position: number;
+  parent_id?: string | null;
+}
+
+// Position updates to move `draggedId` into `newParentId`, placed next to
+// `targetId` (or at the end when null). placeAfter: true => after target.
+// Renumbers the destination siblings on the (index + 1) * 1000 scheme and only
+// returns rows whose position or parent actually changes.
+export function computeReparentUpdates({
+  items,
+  draggedId,
+  newParentId,
+  targetId,
+  placeAfter,
+}: {
+  items: WorkItem[];
+  draggedId: string;
+  newParentId: string | null;
+  targetId: string | null;
+  placeAfter: boolean;
+}): ReparentUpdate[] {
+  const dragged = items.find((w) => w.id === draggedId);
+  if (!dragged) return [];
+  const sameParent = (dragged.parent_id ?? null) === newParentId;
+
+  const siblings = items
+    .filter((w) => (w.parent_id ?? null) === newParentId && !w.deleted_at && w.id !== draggedId)
+    .sort(siblingCompare);
+
+  let insertIdx: number;
+  if (targetId == null) {
+    insertIdx = siblings.length;
+  } else {
+    const ti = siblings.findIndex((w) => w.id === targetId);
+    insertIdx = ti < 0 ? siblings.length : placeAfter ? ti + 1 : ti;
+  }
+
+  const next = [...siblings];
+  next.splice(insertIdx, 0, dragged);
+
+  const updates: ReparentUpdate[] = [];
+  next.forEach((w, i) => {
+    const newPos = (i + 1) * 1000;
+    const parentChange = w.id === draggedId && !sameParent;
+    if (w.position !== newPos || parentChange) {
+      const u: ReparentUpdate = { id: w.id, position: newPos };
+      if (parentChange) u.parent_id = newParentId;
+      updates.push(u);
+    }
+  });
+  return updates;
+}
+
+// A position for a NEW sibling inserted at `index` among `siblings` (already in
+// sibling order). Uses the integer gap when there is one; otherwise renumbers
+// the siblings at and after the insertion point to open a gap, returning those
+// moves alongside. position is an int column, so a fractional midpoint is not
+// an option.
+export function insertionPosition(
+  siblings: WorkItem[],
+  index: number,
+): { position: number; renumber: ReparentUpdate[] } {
+  const prev = index > 0 ? siblings[index - 1] : undefined;
+  const next = index < siblings.length ? siblings[index] : undefined;
+  if (!next) return { position: prev ? prev.position + 1000 : 1000, renumber: [] };
+  const lo = prev ? prev.position : 0;
+  if (next.position - lo > 1) {
+    return { position: Math.floor((lo + next.position) / 2), renumber: [] };
+  }
+  const renumber: ReparentUpdate[] = [];
+  siblings.forEach((w, i) => {
+    const pos = (i < index ? i + 1 : i + 2) * 1000;
+    if (w.position !== pos) renumber.push({ id: w.id, position: pos });
+  });
+  return { position: (index + 1) * 1000, renumber };
 }

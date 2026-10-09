@@ -18,12 +18,14 @@ export function useMyTimeEntries(opts: { since?: string | null } = {}) {
   return useQuery({
     queryKey: myTimeEntriesKey(since),
     queryFn: async (): Promise<TimeEntry[]> => {
-      const { data: u } = await supabase.auth.getUser();
-      if (!u.user) return [];
+      // Stored session, not getUser(): no auth-server round trip per refetch.
+      const { data: s } = await supabase.auth.getSession();
+      const me = s.session?.user;
+      if (!me) return [];
       let q = supabase
         .from('time_entries')
         .select('*')
-        .eq('user_id', u.user.id)
+        .eq('user_id', me.id)
         .order('start_at', { ascending: false });
       if (since) q = q.gte('start_at', since);
       const { data, error } = await q;
@@ -38,12 +40,13 @@ export function useActiveTimer() {
   return useQuery({
     queryKey: activeTimerKey,
     queryFn: async (): Promise<TimeEntry | null> => {
-      const { data: u } = await supabase.auth.getUser();
-      if (!u.user) return null;
+      const { data: s } = await supabase.auth.getSession();
+      const me = s.session?.user;
+      if (!me) return null;
       const { data, error } = await supabase
         .from('time_entries')
         .select('*')
-        .eq('user_id', u.user.id)
+        .eq('user_id', me.id)
         .is('end_at', null)
         .maybeSingle();
       if (error) throw error;
@@ -218,22 +221,32 @@ function invalidateAll(qc: ReturnType<typeof useQueryClient>) {
 
 // --- Realtime ----------------------------------------------------------------
 
+// Debounced: an import inserts hundreds of rows in one call, and one refetch
+// per row queued hundreds of requests behind the auth lock, stalling the
+// import's own next call by minutes. Refetch once the burst has settled.
+const REALTIME_DEBOUNCE_MS = 500;
+
 export function useTimeEntriesRealtime() {
   const qc = useQueryClient();
   useEffect(() => {
+    let timer: number | null = null;
+    const invalidate = () => {
+      if (timer != null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = null;
+        qc.invalidateQueries({ queryKey: timeEntriesKey });
+      }, REALTIME_DEBOUNCE_MS);
+    };
     // Unique channel name per subscriber — re-using the same name across
     // multiple mounted hooks (e.g. widget + page) triggers
     // "cannot add postgres_changes callbacks after subscribe()".
     const name = `time_entries_changes:${Math.random().toString(36).slice(2)}`;
     const channel = supabase
       .channel(name)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'time_entries' },
-        () => qc.invalidateQueries({ queryKey: timeEntriesKey }),
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entries' }, invalidate)
       .subscribe();
     return () => {
+      if (timer != null) window.clearTimeout(timer);
       supabase.removeChannel(channel);
     };
   }, [qc]);

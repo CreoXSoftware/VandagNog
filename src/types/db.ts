@@ -12,6 +12,7 @@ export interface Project {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  deleted_by?: string | null;
   client_id: string | null;
 }
 
@@ -56,6 +57,33 @@ export interface ProjectMember {
   display_name?: string;
   first_name?: string | null;
   last_name?: string | null;
+  // From project_members_list: `role` is the effective role. direct_role is the
+  // person's own project_members row (null when access is only via a team);
+  // team_role is the best role among linked teams they are in.
+  direct_role?: ProjectRole | null;
+  team_role?: ProjectRole | null;
+  team_ids?: string[];
+}
+
+// A deleted project the caller owns (deleted_projects_list).
+export interface DeletedProject {
+  id: string;
+  name: string;
+  description: string | null;
+  deleted_at: string;
+  deleted_by: string | null;
+  deleted_by_name: string | null;
+}
+
+// A team linked to a project (project_teams_list).
+export interface ProjectTeam {
+  team_id: string;
+  name: string;
+  role: ProjectRole;
+  member_count: number;
+  added_by: string | null;
+  added_at: string;
+  i_am_member: boolean;
 }
 
 export interface ProjectInvite {
@@ -194,7 +222,7 @@ export interface AuditLogEntry {
   id: number;
   project_id: string;
   actor_id: string;
-  entity_type: 'work_item' | 'dependency' | 'project_member';
+  entity_type: 'work_item' | 'dependency' | 'project_member' | 'project_team';
   entity_id: string;
   action: 'create' | 'update' | 'delete' | 'restore';
   before: Record<string, unknown> | null;

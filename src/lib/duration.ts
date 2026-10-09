@@ -8,6 +8,16 @@ export function parseDurationInput(input: string): number | null {
   return m[2] === 'w' ? n * 5 : n;
 }
 
+// Looser variant for quick entry: a bare number means working days.
+export function parseQuickDuration(input: string): number | null {
+  const s = input.trim().toLowerCase();
+  if (/^\d+$/.test(s)) {
+    const n = Number(s);
+    return n > 0 ? n : null;
+  }
+  return parseDurationInput(s);
+}
+
 export function formatDurationWorkDays(workDays: number): string {
   if (workDays <= 0) return '0d';
   if (workDays % 5 === 0) return `${workDays / 5}w`;

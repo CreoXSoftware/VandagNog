@@ -30,6 +30,8 @@ export interface TasksPrefs {
   hideEmpty: boolean;
   /** Collapsed project groups. */
   collapsed: string[];
+  /** Collapsed summary rows in the outline. */
+  collapsedItems: string[];
 }
 
 export const DEFAULT_TASKS_PREFS: TasksPrefs = {
@@ -41,6 +43,7 @@ export const DEFAULT_TASKS_PREFS: TasksPrefs = {
   showDone: false,
   hideEmpty: true,
   collapsed: [],
+  collapsedItems: [],
 };
 
 function strArray(v: unknown): string[] {
@@ -67,6 +70,7 @@ export function loadTasksPrefs(): TasksPrefs {
       showDone: p.showDone === true,
       hideEmpty: versioned ? p.hideEmpty === true : DEFAULT_TASKS_PREFS.hideEmpty,
       collapsed: strArray(p.collapsed),
+      collapsedItems: strArray(p.collapsedItems),
     };
   } catch {
     return DEFAULT_TASKS_PREFS;

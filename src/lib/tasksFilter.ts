@@ -5,7 +5,15 @@
 // levels.ts statusOf). Dates only become Date objects via parseDate/addDays so
 // nothing ever goes through toISOString(), which would shift a day west of UTC.
 
-import { addDays, isoDow, parseDate, toDateString } from '@/components/gantt/ganttUtils';
+import {
+  addDays,
+  isoDow,
+  parseDate,
+  snapBackward,
+  snapForward,
+  toDateString,
+  type WorkCalendar,
+} from '@/components/gantt/ganttUtils';
 import type { WorkItem } from '@/types/db';
 
 export type TimeFilter = 'today' | 'tomorrow' | 'week' | 'all';
@@ -43,9 +51,6 @@ export function rangeFor(when: TimeFilter, today: string): IsoRange | null {
 
 export type TaskBucket = 'overdue' | 'inRange' | 'undated' | 'done';
 
-// Visual order of the buckets within a project group.
-export const BUCKET_ORDER: TaskBucket[] = ['overdue', 'inRange', 'undated', 'done'];
-
 // Which bucket an item falls into, or null when the time filter excludes it.
 //
 // "In range" is an OVERLAP test, not a due-date test: a task counts for today if
@@ -82,4 +87,17 @@ export function seedDatesFor(
     return { start_date: t, end_date: t };
   }
   return { start_date: today, end_date: today };
+}
+
+// Snap a seeded date onto the project's working calendar. The DB trigger would
+// snap it anyway; doing it client-side keeps the optimistic row honest.
+export function snapIso(
+  iso: string | null,
+  calendar: WorkCalendar,
+  dir: 'forward' | 'backward',
+): string | null {
+  if (!iso) return null;
+  const d = parseDate(iso);
+  if (!d) return iso;
+  return toDateString(dir === 'forward' ? snapForward(d, calendar) : snapBackward(d, calendar));
 }

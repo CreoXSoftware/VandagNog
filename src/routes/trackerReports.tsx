@@ -12,6 +12,8 @@ import { useTrackerPeople } from '@/hooks/useTrackerPeople';
 import { useMyTeams, useTeamMembers } from '@/hooks/useTeams';
 import { durationMs, formatHM, formatHoursDecimal, isoDate } from '@/lib/timeFormat';
 import { exportCSV, exportExcel, exportPDF, type ReportRow, type ReportSummary } from '@/lib/exporters/trackerExports';
+import { exportClockifyCSV } from '@/lib/exporters/timeEntriesCsv';
+import { toast } from 'sonner';
 import type { TimeEntry } from '@/types/db';
 
 type TaskMode = 'all' | 'noTask' | 'workItem' | 'custom';
@@ -85,6 +87,21 @@ export function TrackerReportsPage() {
     filters: filterChips(filters, catalog, people, teams),
     rows,
   }), [totalMs, filters, catalog, people, teams, rows]);
+
+  // Raw entries in Clockify's CSV format, re-importable via Tracker → Import.
+  function exportEntries() {
+    if (!catalog) return;
+    const out = exportClockifyCSV(
+      filtered,
+      {
+        projectById: new Map(catalog.projects.map((p) => [p.id, p])),
+        workItemNameById: new Map(catalog.workItems.map((w) => [w.id, w.name])),
+        personById: new Map(people.map((p) => [p.user_id, p])),
+      },
+      { since: filters.since, until: filters.until },
+    );
+    if (out.skippedRunning > 0) toast.info(t('tracker.exportSkippedRunning', { count: out.skippedRunning }));
+  }
 
   // Workitem options scoped to selected project
   const wiOptions = useMemo(() => {
@@ -181,6 +198,14 @@ export function TrackerReportsPage() {
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => exportCSV(summary)} disabled={!rows.length}>
                 <Download size={14} /> CSV
+              </Button>
+              <Button
+                variant="outline"
+                onClick={exportEntries}
+                disabled={!rows.length}
+                title={t('tracker.exportClockifyHint')}
+              >
+                <Download size={14} /> {t('tracker.exportClockify')}
               </Button>
               <Button variant="outline" onClick={() => exportExcel(summary)} disabled={!rows.length}>
                 <Download size={14} /> Excel

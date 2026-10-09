@@ -131,6 +131,8 @@ const workloadRoute = createRoute({
 interface TasksSearch {
   when?: TimeFilter;
   item?: string;
+  /** "trash" shows Recently deleted instead of the outline. */
+  view?: 'trash';
 }
 
 const tasksRoute = createRoute({
@@ -139,6 +141,7 @@ const tasksRoute = createRoute({
   validateSearch: (s: Record<string, unknown>): TasksSearch => ({
     when: isTimeFilter(s.when) ? s.when : undefined,
     item: typeof s.item === 'string' ? s.item : undefined,
+    view: s.view === 'trash' ? 'trash' : undefined,
   }),
   component: TasksPage,
 });

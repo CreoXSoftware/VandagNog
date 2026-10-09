@@ -2,7 +2,8 @@ import { useMemo, useState, useRef, useEffect, useLayoutEffect, useCallback } fr
 import { ChevronDown, ChevronRight, ZoomIn, ZoomOut, Plus, Trash2, ListPlus, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Dependency, NonWorkingDay, WorkItem } from '@/types/db';
-import { useCreateWorkItem, useDeleteWorkItem, useReorderWorkItems, useRescheduleFrom, type ReorderUpdate } from '@/hooks/useWorkItems';
+import { useCreateWorkItem, useDeleteWorkItem, useReorderWorkItems, useRescheduleFrom } from '@/hooks/useWorkItems';
+import { computeReparentUpdates } from '@/lib/workItemTree';
 import { cn } from '@/lib/utils';
 import {
   DAY_WIDTH,
@@ -1260,51 +1261,4 @@ function flatten(
   }
   walk(null, 0);
   return out;
-}
-
-// Compute position updates to move `draggedId` into `newParentId`, placed
-// next to `targetId` (or at end when null). placeAfter: true => after target.
-function computeReparentUpdates({
-  items,
-  draggedId,
-  newParentId,
-  targetId,
-  placeAfter,
-}: {
-  items: WorkItem[];
-  draggedId: string;
-  newParentId: string | null;
-  targetId: string | null;
-  placeAfter: boolean;
-}): ReorderUpdate[] {
-  const dragged = items.find((w) => w.id === draggedId);
-  if (!dragged) return [];
-  const sameParent = (dragged.parent_id ?? null) === newParentId;
-
-  const siblings = items
-    .filter((w) => (w.parent_id ?? null) === newParentId && !w.deleted_at && w.id !== draggedId)
-    .sort(siblingCompare);
-
-  let insertIdx: number;
-  if (targetId == null) {
-    insertIdx = siblings.length;
-  } else {
-    const ti = siblings.findIndex((w) => w.id === targetId);
-    insertIdx = ti < 0 ? siblings.length : (placeAfter ? ti + 1 : ti);
-  }
-
-  const next = [...siblings];
-  next.splice(insertIdx, 0, dragged);
-
-  const updates: ReorderUpdate[] = [];
-  next.forEach((w, i) => {
-    const newPos = (i + 1) * 1000;
-    const parentChange = w.id === draggedId && !sameParent;
-    if (w.position !== newPos || parentChange) {
-      const u: ReorderUpdate = { id: w.id, position: newPos };
-      if (parentChange) u.parent_id = newParentId;
-      updates.push(u);
-    }
-  });
-  return updates;
 }

@@ -8,9 +8,13 @@ import { dependenciesKey } from './useDependencies';
 import { nonWorkingDaysKey } from './useNonWorkingDays';
 import { projectKey } from './useProjects';
 import { tasksDataKey, type TasksData } from './useTasksData';
-import { collectSubtreeIds } from '@/lib/workItemTree';
+import { collectSubtreeIds, type ReparentUpdate } from '@/lib/workItemTree';
 
 export const workItemsKey = (projectId: string) => ['work_items', projectId] as const;
+
+// The "Recently deleted" list on the Tasks page. Every mutation that moves an
+// item into or out of the bin invalidates it.
+export const deletedWorkItemsKey = ['work_items', 'deleted'] as const;
 
 // The global Tasks page holds every work item in one cache entry, so a
 // project-scoped mutation has to patch it too or the row won't move until the
@@ -106,8 +110,10 @@ export function useCreateWorkItem() {
       if (!input.id) return { prevTasks: undefined };
       markLocalWorkItemMutation();
       await qc.cancelQueries({ queryKey: tasksDataKey });
-      const optimistic = provisionalWorkItem(input, input.id);
-      const prevTasks = patchTasksCache(qc, (items) => [...items, optimistic]);
+      const prevTasks = patchTasksCache(qc, (items) => {
+        const parent = input.parent_id ? items.find((w) => w.id === input.parent_id) : undefined;
+        return [...items, provisionalWorkItem(input, input.id!, parent ? parent.level + 1 : 0)];
+      });
       return { prevTasks };
     },
     onError: (_e, _input, ctx) => restoreTasksCache(qc, ctx?.prevTasks),
@@ -118,16 +124,16 @@ export function useCreateWorkItem() {
   });
 }
 
-// A stand-in row shaped like what the server will return. level is 0 because
-// optimistic creates are always root-level (see QuickAddRow); the DB trigger
-// owns the real value and the refetch corrects anything that differs.
-function provisionalWorkItem(input: CreateWorkItemInput, id: string): WorkItem {
+// A stand-in row shaped like what the server will return. level is derived from
+// the cached parent; the DB trigger owns the real value and the refetch corrects
+// anything that differs.
+function provisionalWorkItem(input: CreateWorkItemInput, id: string, level: number): WorkItem {
   const now = new Date().toISOString();
   return {
     id,
     project_id: input.project_id,
     parent_id: input.parent_id,
-    level: 0,
+    level,
     name: input.name,
     description: input.description ?? null,
     deliverable: input.deliverable ?? null,
@@ -183,11 +189,7 @@ export function useUpdateWorkItem() {
   });
 }
 
-export interface ReorderUpdate {
-  id: string;
-  position: number;
-  parent_id?: string | null;
-}
+export type ReorderUpdate = ReparentUpdate;
 
 export function useReorderWorkItems() {
   const qc = useQueryClient();
@@ -204,29 +206,36 @@ export function useReorderWorkItems() {
       }
     },
     onMutate: async (input) => {
-      await qc.cancelQueries({ queryKey: workItemsKey(input.project_id) });
+      markLocalWorkItemMutation();
+      await Promise.all([
+        qc.cancelQueries({ queryKey: workItemsKey(input.project_id) }),
+        qc.cancelQueries({ queryKey: tasksDataKey }),
+      ]);
+      const map = new Map(input.updates.map((u) => [u.id, u]));
+      const apply = (wi: WorkItem): WorkItem => {
+        const u = map.get(wi.id);
+        if (!u) return wi;
+        return {
+          ...wi,
+          position: u.position,
+          ...(u.parent_id !== undefined ? { parent_id: u.parent_id } : {}),
+        } as WorkItem;
+      };
       const prev = qc.getQueryData<WorkItem[]>(workItemsKey(input.project_id));
-      if (prev) {
-        const map = new Map(input.updates.map((u) => [u.id, u]));
-        qc.setQueryData<WorkItem[]>(
-          workItemsKey(input.project_id),
-          prev.map((wi) => {
-            const u = map.get(wi.id);
-            if (!u) return wi;
-            return {
-              ...wi,
-              position: u.position,
-              ...(u.parent_id !== undefined ? { parent_id: u.parent_id } : {}),
-            } as WorkItem;
-          }),
-        );
-      }
-      return { prev };
+      if (prev) qc.setQueryData<WorkItem[]>(workItemsKey(input.project_id), prev.map(apply));
+      const prevTasks = patchTasksCache(qc, (items) => items.map(apply));
+      return { prev, prevTasks };
     },
     onError: (_e, input, ctx) => {
       if (ctx?.prev) qc.setQueryData(workItemsKey(input.project_id), ctx.prev);
+      restoreTasksCache(qc, ctx?.prevTasks);
     },
-    onSettled: (_d, _e, input) => qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) }),
+    // A reparent re-runs the rollup trigger on both the old and new parent, so
+    // both caches refetch to pick up the summaries' new dates and progress.
+    onSettled: (_d, _e, input) => {
+      qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) });
+      qc.invalidateQueries({ queryKey: tasksDataKey });
+    },
   });
 }
 
@@ -253,6 +262,7 @@ export function useDeleteWorkItem() {
       qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) });
       qc.invalidateQueries({ queryKey: dependenciesKey(input.project_id) });
       qc.invalidateQueries({ queryKey: tasksDataKey });
+      qc.invalidateQueries({ queryKey: deletedWorkItemsKey });
     },
   });
 }
@@ -267,6 +277,7 @@ export function useRestoreWorkItem() {
     onSuccess: (_d, input) => {
       qc.invalidateQueries({ queryKey: workItemsKey(input.project_id) });
       qc.invalidateQueries({ queryKey: tasksDataKey });
+      qc.invalidateQueries({ queryKey: deletedWorkItemsKey });
     },
   });
 }
@@ -287,21 +298,34 @@ export function useRescheduleFrom() {
       await Promise.all([
         qc.cancelQueries({ queryKey: workItemsKey(input.project_id) }),
         qc.cancelQueries({ queryKey: dependenciesKey(input.project_id) }),
+        qc.cancelQueries({ queryKey: tasksDataKey }),
       ]);
       const prev = qc.getQueryData<WorkItem[]>(workItemsKey(input.project_id));
-      const prevDeps = qc.getQueryData<Dependency[]>(dependenciesKey(input.project_id)) ?? [];
-      if (!prev) return { prev, prevDeps, prevTasks: undefined };
+      const prevDeps = qc.getQueryData<Dependency[]>(dependenciesKey(input.project_id));
+      const tasks = qc.getQueryData<TasksData>(tasksDataKey);
+
+      // The project caches are cold when this runs from the global Tasks page
+      // without the drawer open. The Tasks dataset carries the same rows, edges
+      // and calendar for every project, so the cascade runs from it instead —
+      // otherwise the new dates would not show until something refetched,
+      // because this mutation deliberately never invalidates.
+      const items = prev ?? tasks?.items.filter((w) => w.project_id === input.project_id);
+      if (!items) return { prev, prevDeps, prevTasks: undefined };
+      const dependencies =
+        prevDeps ?? tasks?.dependencies.filter((d) => d.project_id === input.project_id) ?? [];
 
       const project = qc.getQueryData<Project>(projectKey(input.project_id));
-      const nonWorking = qc.getQueryData<NonWorkingDay[]>(nonWorkingDaysKey(input.project_id)) ?? [];
-      const calendar = buildCalendar(project?.working_days ?? [1, 2, 3, 4, 5], nonWorking);
+      const nonWorking = qc.getQueryData<NonWorkingDay[]>(nonWorkingDaysKey(input.project_id));
+      const calendar =
+        (!project || !nonWorking ? tasks?.calendarByProject.get(input.project_id) : undefined) ??
+        buildCalendar(project?.working_days ?? [1, 2, 3, 4, 5], nonWorking ?? []);
 
       const result = computeCascade({
         rootId: input.work_item_id,
         newStart: input.new_start,
         newEnd: input.new_end,
-        items: prev,
-        dependencies: prevDeps,
+        items,
+        dependencies,
         calendar,
       });
 
@@ -310,7 +334,7 @@ export function useRescheduleFrom() {
         return p ? ({ ...wi, ...p } as WorkItem) : wi;
       };
 
-      qc.setQueryData<WorkItem[]>(workItemsKey(input.project_id), prev.map(applyCascade));
+      if (prev) qc.setQueryData<WorkItem[]>(workItemsKey(input.project_id), prev.map(applyCascade));
       // Same patch set on the global cache, so a date edited from the Tasks page
       // moves there too. The cascade is authoritative (it mirrors the server), so
       // like the project cache this is deliberately not invalidated afterwards.

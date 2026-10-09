@@ -240,7 +240,7 @@ function AddTeamToProjectDialog({ teamId }: { teamId: string }) {
     try {
       const n = await add.mutateAsync({ project_id: projectId, team_id: teamId, role });
       setOpen(false);
-      toast.success(t('projectAdd.addedCount_toast', { count: n }));
+      toast.success(t('projectAdd.linked_toast', { count: n }));
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -273,7 +273,7 @@ function AddTeamToProjectDialog({ teamId }: { teamId: string }) {
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => setOpen(false)}>{t('common.cancel')}</Button>
             <Button onClick={submit} disabled={add.isPending || !projectId}>
-              {add.isPending ? '…' : t('projectAdd.add')}
+              {add.isPending ? '…' : t('projectAdd.linkTeam')}
             </Button>
           </div>
         </div>

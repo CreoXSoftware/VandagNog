@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
-import type { Project } from '@/types/db';
+import type { DeletedProject, Project } from '@/types/db';
 
 export const projectsKey = ['projects'] as const;
+export const deletedProjectsKey = ['projects', 'deleted'] as const;
 export const projectKey = (id: string) => ['project', id] as const;
 
 export function useProjects() {
@@ -70,16 +71,40 @@ export function useUpdateProject() {
   });
 }
 
+// Soft delete: the project and everything in it disappear for all members
+// (is_member is false while deleted) but nothing is removed, so it can be
+// restored. Owner only. Invalidates everything because tasks, workload,
+// tracker and client lists all include rows from the project.
 export function useDeleteProject() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase
-        .from('projects')
-        .update({ deleted_at: new Date().toISOString() })
-        .eq('id', id);
+      const { error } = await supabase.rpc('delete_project', { p_id: id });
       if (error) throw error;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: projectsKey }),
+    onSuccess: () => qc.invalidateQueries(),
+  });
+}
+
+export function useRestoreProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.rpc('restore_project', { p_id: id });
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries(),
+  });
+}
+
+// Deleted projects the current user owns, newest first.
+export function useDeletedProjects() {
+  return useQuery({
+    queryKey: deletedProjectsKey,
+    queryFn: async (): Promise<DeletedProject[]> => {
+      const { data, error } = await supabase.rpc('deleted_projects_list');
+      if (error) throw error;
+      return (data ?? []) as DeletedProject[];
+    },
   });
 }

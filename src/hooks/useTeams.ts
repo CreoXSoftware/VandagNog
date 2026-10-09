@@ -153,6 +153,9 @@ export function useDeleteTeam() {
   });
 }
 
+// Links the team itself (project_teams): everyone in it, now and later, gets
+// access at `role`. Re-linking an already linked team changes its role.
+// Returns the team's member count.
 export function useAddTeamToProject() {
   const qc = useQueryClient();
   return useMutation({
@@ -165,7 +168,10 @@ export function useAddTeamToProject() {
       if (error) throw error;
       return (data as number) ?? 0;
     },
-    onSuccess: (_d, input) => qc.invalidateQueries({ queryKey: ['members', input.project_id] }),
+    onSuccess: (_d, input) => {
+      qc.invalidateQueries({ queryKey: ['members', input.project_id] });
+      qc.invalidateQueries({ queryKey: ['project_teams', input.project_id] });
+    },
   });
 }
 

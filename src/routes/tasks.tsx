@@ -1,54 +1,26 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
-import { ChevronDown, ChevronRight, Download, Upload } from 'lucide-react';
+import { Download, ListTree, Trash2, Upload } from 'lucide-react';
 import { useT } from '@/lib/i18n';
-import { useTasksData, type TasksPerson } from '@/hooks/useTasksData';
+import { useTasksData } from '@/hooks/useTasksData';
 import { useGlobalWorkItemsRealtime } from '@/hooks/useGlobalWorkItemsRealtime';
 import { useDeleteWorkItem, useRestoreWorkItem, useUpdateWorkItem } from '@/hooks/useWorkItems';
+import { useDeletedWorkItems } from '@/hooks/useDeletedWorkItems';
 import { TaskFilters, UNASSIGNED } from '@/components/tasks/TaskFilters';
-import { TaskRow } from '@/components/tasks/TaskRow';
-import { QuickAddRow } from '@/components/tasks/QuickAddRow';
+import { TaskOutline, type OutlineGroup } from '@/components/tasks/TaskOutline';
+import { TaskTrash } from '@/components/tasks/TaskTrash';
 import { TaskDrawerHost } from '@/components/tasks/TaskDrawerHost';
 import { JsonSyncDialog } from '@/components/tasks/JsonSyncDialog';
 import { Button } from '@/components/ui/Button';
-import {
-  bucketOf,
-  rangeFor,
-  todayIso,
-  BUCKET_ORDER,
-  type TaskBucket,
-  type TimeFilter,
-} from '@/lib/tasksFilter';
-import type { WorkCalendar } from '@/components/gantt/ganttUtils';
+import { bucketOf, rangeFor, todayIso } from '@/lib/tasksFilter';
 import { ancestorChain, collectSubtreeIds, indexById, leafIds } from '@/lib/workItemTree';
+import { withAncestors } from '@/lib/taskOutline';
 import { itemStatus } from '@/components/gantt/filterLogic';
-import { siblingCompare } from '@/lib/levels';
-import { avatarHue } from '@/lib/userDisplay';
 import { exportWorkspaceJson } from '@/lib/bulkExport';
 import { loadTasksPrefs, saveTasksPrefs } from '@/lib/tasksPrefs';
+import { cn } from '@/lib/utils';
 import type { WorkItem } from '@/types/db';
-
-interface Row {
-  item: WorkItem;
-  bucket: TaskBucket;
-  /** Set on the first row of each bucket, so the list can print a subheader. */
-  headerBucket: TaskBucket | null;
-  breadcrumb: string[];
-  isMine: boolean;
-}
-
-interface Group {
-  projectId: string;
-  projectName: string;
-  rows: Row[];
-  openCount: number;
-  doneCount: number;
-  rootPositions: number[];
-  canEdit: boolean;
-  /** Who a task quick-added into this group is assigned to. */
-  quickAddAssigneeId: string | null;
-}
 
 export function TasksPage() {
   const t = useT();
@@ -57,10 +29,13 @@ export function TasksPage() {
 
   const { data, isLoading, error } = useTasksData();
   useGlobalWorkItemsRealtime();
+  const { entries: trashEntries } = useDeletedWorkItems(data?.items);
 
   const update = useUpdateWorkItem();
   const del = useDeleteWorkItem();
   const restore = useRestoreWorkItem();
+
+  const view = search.view === 'trash' ? 'trash' : 'list';
 
   // Read once, lazily. The URL still wins when it carries a time filter, so a
   // shared link keeps working; arriving from the sidebar (no search params)
@@ -80,6 +55,9 @@ export function TasksPage() {
   const [hideEmpty, setHideEmpty] = useState(prefs0.hideEmpty);
   const [syncOpen, setSyncOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set(prefs0.collapsed));
+  const [collapsedItems, setCollapsedItems] = useState<Set<string>>(
+    new Set(prefs0.collapsedItems),
+  );
 
   const me = data?.currentUserId ?? null;
 
@@ -105,12 +83,14 @@ export function TasksPage() {
       showDone,
       hideEmpty,
       collapsed: Array.from(collapsed),
+      collapsedItems: Array.from(collapsedItems),
     });
-  }, [when, projectIds, assigneeSel, statuses, searchText, showDone, hideEmpty, collapsed]);
+  }, [when, projectIds, assigneeSel, statuses, searchText, showDone, hideEmpty, collapsed, collapsedItems]);
 
-  // Ticking a task normally filters it straight out of view, which makes the
-  // click feel like the row vanished rather than completed. Keep just-ticked ids
-  // visible (struck through) until the filters change.
+  // Anything you just created, renamed, ticked, re-assigned or moved stays on
+  // screen even if it no longer matches the filters — otherwise typing a task
+  // that is not "today" or not yours would make it vanish under the cursor.
+  // The pins are dropped when the filters change.
   //
   // Reset during render rather than in an effect: an effect would paint one
   // frame with the stale set before clearing it.
@@ -122,25 +102,34 @@ export function TasksPage() {
     searchText,
     showDone,
   ]);
-  const [done, setDone] = useState<{ sig: string; ids: Set<string> }>({
+  const [pins, setPins] = useState<{ sig: string; ids: Set<string> }>({
     sig: filterSig,
     ids: new Set(),
   });
-  if (done.sig !== filterSig) setDone({ sig: filterSig, ids: new Set() });
-  const justDone = done.ids;
+  if (pins.sig !== filterSig) setPins({ sig: filterSig, ids: new Set() });
+  const pinned = pins.ids;
+
+  function pin(ids: string[]) {
+    setPins((prev) => {
+      if (ids.every((id) => prev.ids.has(id))) return prev;
+      const next = new Set(prev.ids);
+      for (const id of ids) next.add(id);
+      return { sig: prev.sig, ids: next };
+    });
+  }
 
   const peopleById = useMemo(
     () => new Map((data?.people ?? []).map((p) => [p.user_id, p])),
     [data?.people],
   );
 
-  const groups: Group[] = useMemo(() => {
+  const groups: OutlineGroup[] = useMemo(() => {
     if (!data) return [];
 
     const byId = indexById(data.items);
-    // Summary rows have their dates and progress recomputed from their children
-    // by the work_items_rollup trigger, so ticking one is a lie that silently
-    // reverts. Only leaves are listed; ancestors show up as breadcrumb text.
+    // Filters judge leaves: summary rows take their dates, progress and (by
+    // convention) relevance from their children, and are shown as the context
+    // of whatever matches beneath them.
     const leaves = leafIds(data.items);
 
     const projectSet = new Set(projectIds);
@@ -160,20 +149,28 @@ export function TasksPage() {
       return me && members.includes(me) ? me : null;
     }
 
-    const byProject = new Map<string, Row[]>();
+    const itemsByProject = new Map<string, WorkItem[]>();
+    const matchedByProject = new Map<string, Set<string>>();
     const counts = new Map<string, { open: number; done: number }>();
+    const matchedIn = (projectId: string) => {
+      let s = matchedByProject.get(projectId);
+      if (!s) matchedByProject.set(projectId, (s = new Set()));
+      return s;
+    };
 
     for (const item of data.items) {
+      const arr = itemsByProject.get(item.project_id);
+      if (arr) arr.push(item);
+      else itemsByProject.set(item.project_id, [item]);
+
+      if (pinned.has(item.id)) matchedIn(item.project_id).add(item.id);
+
       if (!leaves.has(item.id)) continue;
       if (projectSet.size > 0 && !projectSet.has(item.project_id)) continue;
-
-      if (assigneeSet.size > 0) {
-        if (!assigneeSet.has(item.assignee_id ?? UNASSIGNED)) continue;
-      }
+      if (assigneeSet.size > 0 && !assigneeSet.has(item.assignee_id ?? UNASSIGNED)) continue;
       if (statusSet.size > 0 && !itemStatus(item, today).some((s) => statusSet.has(s))) continue;
-
-      const chain = ancestorChain(byId, item);
       if (q) {
+        const chain = ancestorChain(byId, item);
         const hay = [item.name, ...chain.map((c) => c.name)].join(' ').toLowerCase();
         if (!hay.includes(q)) continue;
       }
@@ -186,72 +183,41 @@ export function TasksPage() {
       else tally.open += 1;
       counts.set(item.project_id, tally);
 
-      if (bucket === 'done' && !showDone && !justDone.has(item.id)) continue;
-
-      const arr = byProject.get(item.project_id) ?? [];
-      arr.push({
-        item,
-        bucket,
-        headerBucket: null, // assigned after the group is sorted
-        breadcrumb: chain.map((c) => c.name),
-        isMine: !!me && item.assignee_id === me,
-      });
-      byProject.set(item.project_id, arr);
+      if (bucket === 'done' && !showDone) continue;
+      matchedIn(item.project_id).add(item.id);
     }
 
-    const rootPositionsByProject = new Map<string, number[]>();
-    for (const w of data.items) {
-      if (w.parent_id) continue;
-      const arr = rootPositionsByProject.get(w.project_id) ?? [];
-      arr.push(w.position);
-      rootPositionsByProject.set(w.project_id, arr);
-    }
-
-    const bucketRank = new Map(BUCKET_ORDER.map((b, i) => [b, i]));
-
-    const out: Group[] = [];
+    const out: OutlineGroup[] = [];
     for (const p of data.projects) {
       if (projectSet.size > 0 && !projectSet.has(p.id)) continue;
-      const rows = byProject.get(p.id) ?? [];
+      const items = itemsByProject.get(p.id) ?? [];
+      const visible = withAncestors(items, matchedByProject.get(p.id) ?? new Set());
       // Default: only projects with something in scope. Turning this off shows
-      // every project you can see, which is how you reach the quick-add row of a
-      // project that has nothing scheduled.
-      if (hideEmpty && rows.length === 0) continue;
-
-      rows.sort((a, b) => {
-        if (a.isMine !== b.isMine) return a.isMine ? -1 : 1;
-        const br = bucketRank.get(a.bucket)! - bucketRank.get(b.bucket)!;
-        if (br !== 0) return br;
-        const ae = a.item.end_date ?? '';
-        const be = b.item.end_date ?? '';
-        if (ae !== be) return ae < be ? -1 : 1;
-        return siblingCompare(a.item, b.item);
-      });
-
-      // Bucket subheaders only earn their space when the group spans more than
-      // one bucket.
-      if (new Set(rows.map((r) => r.bucket)).size > 1) {
-        let last: TaskBucket | null = null;
-        for (const r of rows) {
-          r.headerBucket = r.bucket === last ? null : r.bucket;
-          last = r.bucket;
-        }
-      }
+      // every project you can see, which is how you reach the add-a-task row of
+      // a project that has nothing scheduled.
+      if (hideEmpty && visible.size === 0) continue;
 
       const tally = counts.get(p.id) ?? { open: 0, done: 0 };
       out.push({
         projectId: p.id,
         projectName: p.name,
-        rows,
+        items,
+        visible,
         openCount: tally.open,
         doneCount: tally.done,
-        rootPositions: rootPositionsByProject.get(p.id) ?? [],
         canEdit: data.editableProjectIds.has(p.id),
         quickAddAssigneeId: quickAddAssignee(p.id),
+        calendar: data.calendarByProject.get(p.id),
       });
     }
     return out;
-  }, [data, me, projectIds, assigneeIds, statuses, searchText, showDone, hideEmpty, justDone, range, today]);
+  }, [data, me, projectIds, assigneeIds, statuses, searchText, showDone, hideEmpty, pinned, range, today]);
+
+  const trashCount = useMemo(() => {
+    if (!trashEntries || !data) return 0;
+    const ids = new Set(data.projects.map((p) => p.id));
+    return trashEntries.filter((e) => ids.has(e.root.item.project_id)).length;
+  }, [trashEntries, data]);
 
   const selected = useMemo(
     () => (search.item ? data?.items.find((w) => w.id === search.item) : undefined),
@@ -264,14 +230,12 @@ export function TasksPage() {
   function select(id: string | undefined) {
     nav({ to: '/tasks', search: { ...search, item: id } });
   }
+  function setView(v: 'list' | 'trash') {
+    nav({ to: '/tasks', search: { ...search, view: v === 'trash' ? 'trash' : undefined, item: undefined } });
+  }
 
   function toggle(item: WorkItem, isDone: boolean) {
-    setDone((prev) => {
-      const ids = new Set(prev.ids);
-      if (isDone) ids.add(item.id);
-      else ids.delete(item.id);
-      return { sig: prev.sig, ids };
-    });
+    pin([item.id]);
     update.mutate(
       { id: item.id, project_id: item.project_id, patch: { progress: isDone ? 100 : 0 } },
       { onError: (e) => toast.error((e as Error).message) },
@@ -294,6 +258,7 @@ export function TasksPage() {
         onSuccess: () => {
           if (search.item === item.id) select(undefined);
           toast.success(t('tasks.deleted', { name: item.name }), {
+            description: t('tasks.deletedHint'),
             action: {
               label: t('tasks.undo'),
               onClick: () =>
@@ -333,90 +298,125 @@ export function TasksPage() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-4 pt-4 flex items-start justify-between gap-3">
+      <div className="px-4 pt-4 flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-lg font-semibold">{t('tasks.title')}</h1>
           <div className="text-xs text-neutral-500 dark:text-neutral-400">
-            {t('tasks.subtitle')}
+            {view === 'trash' ? t('tasks.trash.subtitle') : t('tasks.subtitle')}
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <Button size="sm" variant="outline" onClick={exportAll} disabled={!data}>
-            <Download size={13} />
-            {t('tasks.export')}
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => setSyncOpen(true)} disabled={!data}>
-            <Upload size={13} />
-            {t('tasks.sync.open')}
-          </Button>
+          <div className="inline-flex bg-neutral-100 dark:bg-neutral-800 rounded p-0.5" role="tablist">
+            <ViewTab active={view === 'list'} onClick={() => setView('list')}>
+              <ListTree size={13} />
+              {t('tasks.view.list')}
+            </ViewTab>
+            <ViewTab active={view === 'trash'} onClick={() => setView('trash')}>
+              <Trash2 size={13} />
+              {t('tasks.view.trash')}
+              {trashCount > 0 && (
+                <span className="ml-0.5 rounded-full bg-neutral-200 dark:bg-neutral-700 px-1.5 text-[10px] tabular-nums">
+                  {trashCount}
+                </span>
+              )}
+            </ViewTab>
+          </div>
+          {view === 'list' && (
+            <>
+              <Button size="sm" variant="outline" onClick={exportAll} disabled={!data}>
+                <Download size={13} />
+                {t('tasks.export')}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setSyncOpen(true)} disabled={!data}>
+                <Upload size={13} />
+                {t('tasks.sync.open')}
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
-      <div className="px-4 py-3">
-        <TaskFilters
-          when={when}
-          setWhen={setWhen}
-          projects={data?.projects ?? []}
-          projectIds={projectIds}
-          setProjectIds={setProjectIds}
-          people={data?.people ?? []}
-          assigneeIds={assigneeIds}
-          setAssigneeIds={setAssigneeSel}
-          statuses={statuses}
-          setStatuses={setStatuses}
-          search={searchText}
-          setSearch={setSearchText}
-          mineOnly={mineOnly}
-          setMineOnly={setMineOnly}
-          showDone={showDone}
-          setShowDone={setShowDone}
-          hideEmpty={hideEmpty}
-          setHideEmpty={setHideEmpty}
-        />
-      </div>
-
-      {/* data-keep-drawer: Drawer closes on any outside pointerdown, so without
-          this, ticking a checkbox or switching tasks would dismiss it. */}
-      <div
-        data-keep-drawer
-        className="flex-1 min-h-0 overflow-y-auto border-t border-neutral-200 dark:border-neutral-800"
-      >
-        {isLoading ? (
-          <div className="p-6 text-sm text-neutral-500 dark:text-neutral-400">
-            {t('common.loading')}
-          </div>
-        ) : error ? (
-          <div className="p-6 text-sm text-red-600 dark:text-red-400">{t('tasks.loadError')}</div>
-        ) : groups.length === 0 ? (
-          <div className="p-6 text-sm text-neutral-500 dark:text-neutral-400">{t('tasks.empty')}</div>
-        ) : (
-          groups.map((g) => (
-            <ProjectGroup
-              key={g.projectId}
-              group={g}
-              collapsed={collapsed.has(g.projectId)}
-              onToggleCollapse={() =>
-                setCollapsed((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(g.projectId)) next.delete(g.projectId);
-                  else next.add(g.projectId);
-                  return next;
-                })
-              }
-              today={today}
+      {view === 'trash' ? (
+        <div className="flex-1 min-h-0 mt-3 border-t border-neutral-200 dark:border-neutral-800">
+          {isLoading ? (
+            <div className="p-6 text-sm text-neutral-500 dark:text-neutral-400">{t('common.loading')}</div>
+          ) : error || !data ? (
+            <div className="p-6 text-sm text-red-600 dark:text-red-400">{t('tasks.loadError')}</div>
+          ) : (
+            <TaskTrash data={data} />
+          )}
+        </div>
+      ) : (
+        <>
+          <div className="px-4 py-3">
+            <TaskFilters
               when={when}
-              selectedId={search.item}
-              peopleById={peopleById}
-              calendar={data!.calendarByProject.get(g.projectId)}
-              onToggle={toggle}
-              onOpen={(item) => select(item.id)}
-              onDelete={remove}
+              setWhen={setWhen}
+              projects={data?.projects ?? []}
+              projectIds={projectIds}
+              setProjectIds={setProjectIds}
+              people={data?.people ?? []}
+              assigneeIds={assigneeIds}
+              setAssigneeIds={setAssigneeSel}
+              statuses={statuses}
+              setStatuses={setStatuses}
+              search={searchText}
+              setSearch={setSearchText}
+              mineOnly={mineOnly}
+              setMineOnly={setMineOnly}
+              showDone={showDone}
+              setShowDone={setShowDone}
+              hideEmpty={hideEmpty}
+              setHideEmpty={setHideEmpty}
             />
-          ))
-        )}
-      </div>
+          </div>
 
-      {selected && (
+          {/* data-keep-drawer: Drawer closes on any outside pointerdown, so without
+              this, editing a row or switching tasks would dismiss it. */}
+          <div
+            data-keep-drawer
+            className="flex-1 min-h-0 overflow-y-auto border-t border-neutral-200 dark:border-neutral-800"
+          >
+            {isLoading ? (
+              <div className="p-6 text-sm text-neutral-500 dark:text-neutral-400">
+                {t('common.loading')}
+              </div>
+            ) : error ? (
+              <div className="p-6 text-sm text-red-600 dark:text-red-400">{t('tasks.loadError')}</div>
+            ) : groups.length === 0 ? (
+              <div className="p-6 text-sm text-neutral-500 dark:text-neutral-400">{t('tasks.empty')}</div>
+            ) : (
+              <TaskOutline
+                groups={groups}
+                dependencies={data!.dependencies}
+                peopleById={peopleById}
+                membership={data!.membership}
+                me={me}
+                today={today}
+                when={when}
+                selectedId={search.item}
+                collapsedProjects={collapsed}
+                onToggleProject={(id) =>
+                  setCollapsed((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(id)) next.delete(id);
+                    else next.add(id);
+                    return next;
+                  })
+                }
+                collapsedItems={collapsedItems}
+                setCollapsedItems={setCollapsedItems}
+                pin={pin}
+                onToggleDone={toggle}
+                onOpen={(item) => select(item.id)}
+                onDelete={remove}
+              />
+            )}
+          </div>
+        </>
+      )}
+
+      {selected && view === 'list' && (
         <TaskDrawerHost
           item={selected}
           canEdit={!!data?.editableProjectIds.has(selected.project_id)}
@@ -430,95 +430,29 @@ export function TasksPage() {
   );
 }
 
-function ProjectGroup({
-  group,
-  collapsed,
-  onToggleCollapse,
-  today,
-  when,
-  selectedId,
-  peopleById,
-  calendar,
-  onToggle,
-  onOpen,
-  onDelete,
+function ViewTab({
+  active,
+  onClick,
+  children,
 }: {
-  group: Group;
-  collapsed: boolean;
-  onToggleCollapse: () => void;
-  today: string;
-  when: TimeFilter;
-  selectedId: string | undefined;
-  peopleById: Map<string, TasksPerson>;
-  calendar: WorkCalendar | undefined;
-  onToggle: (item: WorkItem, done: boolean) => void;
-  onOpen: (item: WorkItem) => void;
-  onDelete: (item: WorkItem) => void;
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
 }) {
-  const t = useT();
-  const hue = avatarHue(group.projectId);
-
   return (
-    <section className="border-b border-neutral-200 dark:border-neutral-800">
-      <button
-        type="button"
-        onClick={onToggleCollapse}
-        className="w-full flex items-center gap-2 px-3 h-10 bg-neutral-50 dark:bg-neutral-900/70 hover:bg-neutral-100 dark:hover:bg-neutral-900 sticky top-0 z-10"
-      >
-        {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-        <span
-          className="h-2.5 w-2.5 rounded-sm shrink-0"
-          style={{ backgroundColor: `hsl(${hue} 60% 55%)` }}
-        />
-        <span className="text-sm font-medium truncate">{group.projectName}</span>
-        <span className="ml-auto text-[11px] tabular-nums text-neutral-500 dark:text-neutral-400">
-          {t('tasks.openCount', { n: group.openCount })}
-          {group.doneCount > 0 && ` · ${t('tasks.doneCount', { n: group.doneCount })}`}
-        </span>
-      </button>
-
-      {!collapsed && (
-        <>
-          {group.rows.length === 0 && (
-            <div className="px-3 py-2 text-[11px] text-neutral-400 dark:text-neutral-500">
-              {t('tasks.emptyProject')}
-            </div>
-          )}
-          {group.rows.map((r) => {
-            return (
-              <div key={r.item.id}>
-                {r.headerBucket && (
-                  <div className="px-3 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
-                    {t(`tasks.bucket.${r.headerBucket}` as const)}
-                  </div>
-                )}
-                <TaskRow
-                  item={r.item}
-                  breadcrumb={r.breadcrumb}
-                  assignee={r.item.assignee_id ? peopleById.get(r.item.assignee_id) : undefined}
-                  isMine={r.isMine}
-                  canEdit={group.canEdit}
-                  today={today}
-                  selected={selectedId === r.item.id}
-                  onToggle={onToggle}
-                  onOpen={onOpen}
-                  onDelete={onDelete}
-                />
-              </div>
-            );
-          })}
-          {group.canEdit && calendar && (
-            <QuickAddRow
-              projectId={group.projectId}
-              rootPositions={group.rootPositions}
-              calendar={calendar}
-              when={when}
-              today={today}
-              assigneeId={group.quickAddAssigneeId}
-            />
-          )}
-        </>
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        'flex items-center gap-1.5 px-3 h-7 text-xs rounded transition-colors',
+        active
+          ? 'bg-white dark:bg-neutral-900 shadow-sm text-neutral-900 dark:text-neutral-100'
+          : 'text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 dark:hover:text-neutral-100',
       )}
-    </section>
+    >
+      {children}
+    </button>
   );
 }

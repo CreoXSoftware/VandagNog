@@ -1,9 +1,12 @@
 import { useState } from 'react';
+import { Upload } from 'lucide-react';
 import { Link, useRouterState } from '@tanstack/react-router';
 import { useT } from '@/lib/i18n';
 import { LiveTimerCard } from '@/components/tracker/LiveTimerCard';
 import { ManualEntryForm } from '@/components/tracker/ManualEntryForm';
 import { SessionList } from '@/components/tracker/SessionList';
+import { TimeImportDialog } from '@/components/tracker/TimeImportDialog';
+import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/utils';
 import type { TrackerTarget } from '@/types/db';
 
@@ -17,6 +20,7 @@ export function TrackerPage() {
   const [mode, setMode] = useState<Mode>('live');
   // Shared target between live + manual so toggling preserves selection.
   const [target, setTarget] = useState<TrackerTarget | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -26,8 +30,15 @@ export function TrackerPage() {
             <h1 className="text-lg font-semibold">{t('tracker.title')}</h1>
             <div className="text-xs text-neutral-500 dark:text-neutral-400">{t('tracker.subtitle')}</div>
           </div>
-          <PageTabs onReports={onReports} />
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>
+              <Upload size={13} />
+              {t('tracker.import.open')}
+            </Button>
+            <PageTabs onReports={onReports} />
+          </div>
         </div>
+        <TimeImportDialog open={importOpen} onOpenChange={setImportOpen} />
 
         <div className="inline-flex bg-neutral-100 dark:bg-neutral-800 rounded p-0.5">
           {(['live', 'manual'] as const).map((m) => (

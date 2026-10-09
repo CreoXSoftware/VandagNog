@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useParams, useSearch, useNavigate } from '@tanstack/react-router';
+import { Link, useParams, useSearch, useNavigate } from '@tanstack/react-router';
 import { Pencil } from 'lucide-react';
 import { useProject } from '@/hooks/useProjects';
 import { useProjectRealtime } from '@/hooks/useProjectRealtime';
@@ -30,7 +30,7 @@ export function ProjectPage() {
 
   const [editOpen, setEditOpen] = useState(false);
   const [createdId, setCreatedId] = useState<string | null>(null);
-  const { data: project } = useProject(projectId);
+  const { data: project, isLoading: projectLoading } = useProject(projectId);
   const { data: workItems = [] } = useWorkItems(projectId);
   const { data: dependencies = [] } = useDependencies(projectId);
   const { data: nonWorkingDays = [] } = useNonWorkingDays(projectId);
@@ -54,7 +54,18 @@ export function ProjectPage() {
   }
 
   if (!project) {
-    return <div className="p-6 text-sm text-neutral-500 dark:text-neutral-400">{t('project.loading')}</div>;
+    // null (not undefined) once loaded: deleted, or access removed.
+    if (projectLoading || project === undefined) {
+      return <div className="p-6 text-sm text-neutral-500 dark:text-neutral-400">{t('project.loading')}</div>;
+    }
+    return (
+      <div className="p-6 text-sm text-neutral-500 dark:text-neutral-400 space-y-2">
+        <div>{t('project.notFound')}</div>
+        <Link to="/projects" className="text-sky-700 dark:text-sky-400 hover:underline">
+          {t('project.backToProjects')}
+        </Link>
+      </div>
+    );
   }
 
   const canEdit: boolean = role === 'owner' || role === 'editor';
@@ -152,7 +163,7 @@ export function ProjectPage() {
           onNavigate={(id) => selectItem(id)}
         />
       )}
-      <EditProjectDialog project={project} open={editOpen} onOpenChange={setEditOpen} />
+      <EditProjectDialog project={project} open={editOpen} onOpenChange={setEditOpen} canDelete={role === 'owner'} />
     </div>
   );
 }

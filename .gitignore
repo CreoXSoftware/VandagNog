@@ -24,3 +24,8 @@ dist-ssr
 *.sw?
 .env
 SUPABASE_SETUP.md
+# Claude Code personal settings
+.claude/settings.local.json
+
+# Local test data (real exports with names, emails, rates) — never commit
+test-data/
