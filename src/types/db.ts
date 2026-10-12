@@ -14,6 +14,16 @@ export interface Project {
   deleted_at: string | null;
   deleted_by?: string | null;
   client_id: string | null;
+  /** Set when the project is marked completed; null while active. */
+  completed_at?: string | null;
+  completed_by?: string | null;
+}
+
+/** My own pin / hide state for one project (project_user_prefs). */
+export interface ProjectUserPref {
+  project_id: string;
+  pinned_at: string | null;
+  hidden_at: string | null;
 }
 
 export type ClientScope = 'private' | 'team';

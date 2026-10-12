@@ -1,19 +1,58 @@
 import { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Pencil, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Pencil, Play, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '@/lib/i18n';
-import { useDeleteTimeEntry, useMyTimeEntries } from '@/hooks/useTimeEntries';
+import {
+  pushRecent,
+  useActiveTimer,
+  useDeleteTimeEntry,
+  useMyTimeEntries,
+  useStartTimer,
+} from '@/hooks/useTimeEntries';
 import { useTrackerCatalog, workItemPath, type TrackerCatalog } from '@/hooks/useTrackerCatalog';
 import { durationMs, formatHM, formatWeekLabel, formatDateHuman, weekStartIso, isoDate } from '@/lib/timeFormat';
-import type { TimeEntry } from '@/types/db';
+import type { TimeEntry, TrackerTarget } from '@/types/db';
 import { SessionEditDialog } from './SessionEditDialog';
 
-export function SessionList() {
+interface Props {
+  /** Called after a timer is started from a past session. */
+  onResumed?: (target: TrackerTarget) => void;
+}
+
+export function SessionList({ onResumed }: Props) {
   const t = useT();
   const { data: catalog } = useTrackerCatalog();
   const { data: entries = [] } = useMyTimeEntries();
+  const { data: active } = useActiveTimer();
   const del = useDeleteTimeEntry();
+  const start = useStartTimer();
   const [editing, setEditing] = useState<TimeEntry | null>(null);
+
+  // Whether a past session's task can be timed again right now.
+  function resumeState(target: TrackerTarget): ResumeState {
+    if (start.isPending || !catalog) return 'busy';
+    if (active && groupKey(active) === groupKey(target)) return 'running';
+    // Imported or old entries can point at a project or task you no longer
+    // have; start_time_entry would reject those.
+    if (!catalog.projects.some((p) => p.id === target.project_id)) return 'unavailable';
+    if (target.work_item_id && !catalog.workItems.some((w) => w.id === target.work_item_id)) {
+      return 'unavailable';
+    }
+    return 'ok';
+  }
+
+  // start_time_entry stops whatever is running first, so this doubles as
+  // "switch to this task".
+  async function onResume(target: TrackerTarget) {
+    pushRecent(target);
+    try {
+      await start.mutateAsync(target);
+      toast.success(t('tracker.timerStarted'));
+      onResumed?.(target);
+    } catch (err) {
+      toast.error((err as Error).message);
+    }
+  }
 
   // Group: week → day → groupKey → entries
   const tree = useMemo(() => groupEntries(entries), [entries]);
@@ -45,6 +84,8 @@ export function SessionList() {
           catalog={catalog}
           onEdit={setEditing}
           onDelete={onDelete}
+          resumeState={resumeState}
+          onResume={onResume}
         />
       ))}
       {editing && (
@@ -135,23 +176,62 @@ function groupEntries(entries: TimeEntry[]): WeekNode[] {
   return weeks;
 }
 
-function groupKey(e: TimeEntry): string {
+function groupKey(e: TrackerTarget): string {
   return `${e.project_id}|${e.work_item_id ?? ''}|${e.custom_task_text ?? ''}`;
 }
 
 // ----- Components ------------------------------------------------------------
+
+type ResumeState = 'ok' | 'running' | 'unavailable' | 'busy';
+
+interface ResumeProps {
+  resumeState: (target: TrackerTarget) => ResumeState;
+  onResume: (target: TrackerTarget) => void;
+}
+
+function ResumeButton({ state, onClick }: { state: ResumeState; onClick: () => void }) {
+  const t = useT();
+  const title =
+    state === 'running'
+      ? t('tracker.resumeRunning')
+      : state === 'unavailable'
+        ? t('tracker.resumeUnavailable')
+        : t('tracker.resume');
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={state !== 'ok'}
+      aria-label={title}
+      title={title}
+      className={[
+        'h-5 w-5 flex items-center justify-center rounded shrink-0 disabled:cursor-not-allowed',
+        state === 'running'
+          ? 'text-red-600 dark:text-red-400'
+          : 'text-neutral-500 hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-neutral-500',
+      ].join(' ')}
+    >
+      {state === 'running' ? (
+        <span className="block w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+      ) : (
+        <Play size={12} />
+      )}
+    </button>
+  );
+}
 
 function WeekBlock({
   week,
   catalog,
   onEdit,
   onDelete,
+  ...resume
 }: {
   week: WeekNode;
   catalog: TrackerCatalog | undefined;
   onEdit: (e: TimeEntry) => void;
   onDelete: (e: TimeEntry) => void;
-}) {
+} & ResumeProps) {
   return (
     <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2 bg-neutral-50 dark:bg-neutral-900">
@@ -164,7 +244,7 @@ function WeekBlock({
       </div>
       <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
         {week.days.map((day) => (
-          <DayBlock key={day.date} day={day} catalog={catalog} onEdit={onEdit} onDelete={onDelete} />
+          <DayBlock key={day.date} day={day} catalog={catalog} onEdit={onEdit} onDelete={onDelete} {...resume} />
         ))}
       </div>
     </div>
@@ -176,12 +256,13 @@ function DayBlock({
   catalog,
   onEdit,
   onDelete,
+  ...resume
 }: {
   day: DayNode;
   catalog: TrackerCatalog | undefined;
   onEdit: (e: TimeEntry) => void;
   onDelete: (e: TimeEntry) => void;
-}) {
+} & ResumeProps) {
   const [open, setOpen] = useState(true);
   return (
     <div>
@@ -201,7 +282,7 @@ function DayBlock({
       {open && (
         <div className="bg-neutral-50/50 dark:bg-neutral-900/40">
           {day.groups.map((g) => (
-            <GroupBlock key={g.key} group={g} catalog={catalog} onEdit={onEdit} onDelete={onDelete} />
+            <GroupBlock key={g.key} group={g} catalog={catalog} onEdit={onEdit} onDelete={onDelete} {...resume} />
           ))}
         </div>
       )}
@@ -214,36 +295,58 @@ function GroupBlock({
   catalog,
   onEdit,
   onDelete,
+  resumeState,
+  onResume,
 }: {
   group: GroupNode;
   catalog: TrackerCatalog | undefined;
   onEdit: (e: TimeEntry) => void;
   onDelete: (e: TimeEntry) => void;
-}) {
+} & ResumeProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
   const label = targetLabel(group.project_id, group.work_item_id, group.custom_task_text, catalog, t);
+  const target: TrackerTarget = {
+    project_id: group.project_id,
+    work_item_id: group.work_item_id,
+    custom_task_text: group.custom_task_text,
+  };
+  const state = resumeState(target);
 
+  // The play button sits beside the expand toggle rather than inside it: a
+  // button can't contain another button.
   return (
     <div className="border-t border-neutral-200 dark:border-neutral-800">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-3 py-2 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-      >
-        <div className="flex items-center gap-1.5 min-w-0">
-          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          <PathLabel parts={label} />
+      <div className="flex items-center hover:bg-neutral-100 dark:hover:bg-neutral-800">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex-1 min-w-0 flex items-center justify-between pl-3 pr-3 py-2"
+        >
+          <div className="flex items-center gap-1.5 min-w-0">
+            {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <PathLabel parts={label} />
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] text-neutral-500 dark:text-neutral-400">{group.entries.length}</span>
+            <span className="text-sm font-mono tabular-nums text-neutral-600 dark:text-neutral-300">{formatHM(group.totalMs)}</span>
+          </div>
+        </button>
+        <div className="pr-3">
+          <ResumeButton state={state} onClick={() => onResume(target)} />
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-[11px] text-neutral-500 dark:text-neutral-400">{group.entries.length}</span>
-          <span className="text-sm font-mono tabular-nums text-neutral-600 dark:text-neutral-300">{formatHM(group.totalMs)}</span>
-        </div>
-      </button>
+      </div>
       {open && (
         <div className="divide-y divide-neutral-200/70 dark:divide-neutral-800/60">
           {group.entries.map((e) => (
-            <EntryRow key={e.id} entry={e} onEdit={onEdit} onDelete={onDelete} />
+            <EntryRow
+              key={e.id}
+              entry={e}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              resumeState={state}
+              onResume={() => onResume(target)}
+            />
           ))}
         </div>
       )}
@@ -255,10 +358,14 @@ function EntryRow({
   entry,
   onEdit,
   onDelete,
+  resumeState,
+  onResume,
 }: {
   entry: TimeEntry;
   onEdit: (e: TimeEntry) => void;
   onDelete: (e: TimeEntry) => void;
+  resumeState: ResumeState;
+  onResume: () => void;
 }) {
   const t = useT();
   const ms = durationMs(entry.start_at, entry.end_at);
@@ -275,6 +382,7 @@ function EntryRow({
         )}
       </div>
       <div className="font-mono tabular-nums text-neutral-600 dark:text-neutral-300">{formatHM(ms)}</div>
+      <ResumeButton state={resumeState} onClick={onResume} />
       <button
         type="button"
         onClick={() => onEdit(entry)}

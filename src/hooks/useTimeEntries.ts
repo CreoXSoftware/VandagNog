@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
+import { calibrateServerClock, serverNow } from '@/lib/serverClock';
 import type { TimeEntry } from '@/types/db';
 
 export const timeEntriesKey = ['time_entries'] as const;
@@ -87,14 +88,25 @@ export function useStartTimer() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: StartTimerInput): Promise<string> => {
+      const sentAt = Date.now();
       const { data, error } = await supabase.rpc('start_time_entry', {
         p_project_id: input.project_id,
         p_work_item_id: input.work_item_id ?? null,
         p_custom_task_text: input.custom_task_text ?? null,
         p_notes: input.notes ?? null,
       });
+      const receivedAt = Date.now();
       if (error) throw error;
-      return data as string;
+      const id = data as string;
+      // start_at was stamped with the server's now() inside that round trip,
+      // which is what tells us how far this PC's clock is off.
+      const { data: row } = await supabase
+        .from('time_entries')
+        .select('start_at')
+        .eq('id', id)
+        .maybeSingle();
+      if (row?.start_at) calibrateServerClock(row.start_at, sentAt, receivedAt);
+      return id;
     },
     onMutate: async (input) => {
       await qc.cancelQueries({ queryKey: activeTimerKey });
@@ -106,7 +118,8 @@ export function useStartTimer() {
         work_item_id: input.work_item_id ?? null,
         custom_task_text: input.custom_task_text ?? null,
         notes: input.notes ?? null,
-        start_at: new Date().toISOString(),
+        // Server time, so swapping in the real row doesn't jump the clock.
+        start_at: new Date(serverNow()).toISOString(),
         end_at: null,
       } as unknown as TimeEntry;
       qc.setQueryData(activeTimerKey, optimistic);

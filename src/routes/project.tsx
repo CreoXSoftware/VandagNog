@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Link, useParams, useSearch, useNavigate } from '@tanstack/react-router';
-import { Pencil } from 'lucide-react';
-import { useProject } from '@/hooks/useProjects';
+import { toast } from 'sonner';
+import { CheckCircle2, Pencil, RotateCcw } from 'lucide-react';
+import { useProject, useSetProjectCompleted } from '@/hooks/useProjects';
 import { useProjectRealtime } from '@/hooks/useProjectRealtime';
 import { useWorkItems } from '@/hooks/useWorkItems';
 import { useDependencies } from '@/hooks/useDependencies';
@@ -16,6 +17,7 @@ import { ProjectSummary } from '@/components/project/ProjectSummary';
 import { ProjectExportMenu } from '@/components/project/ProjectExportMenu';
 import { ProjectClientField } from '@/components/client/ProjectClientField';
 import { ProjectSwitcher } from '@/components/project/ProjectSwitcher';
+import { CompletedBadge } from '@/components/project/CompletedBadge';
 import { cn } from '@/lib/utils';
 import type { ProjectRole } from '@/types/db';
 import { useT, type TKey } from '@/lib/i18n';
@@ -36,6 +38,7 @@ export function ProjectPage() {
   const { data: nonWorkingDays = [] } = useNonWorkingDays(projectId);
   const { data: members = [] } = useMembers(projectId);
   const { data: role } = useMyRole(projectId);
+  const setCompleted = useSetProjectCompleted();
 
   const view = search.view ?? 'gantt';
   const selectedItem = search.item ? workItems.find((w) => w.id === search.item) : undefined;
@@ -70,11 +73,24 @@ export function ProjectPage() {
 
   const canEdit: boolean = role === 'owner' || role === 'editor';
   const myRole: ProjectRole | null = role ?? null;
+  const completed = !!project.completed_at;
+
+  function toggleCompleted() {
+    setCompleted.mutate(
+      { id: projectId, completed: !completed },
+      {
+        onSuccess: () =>
+          toast.success(t(completed ? 'projects.reopened_toast' : 'projects.completed_toast')),
+        onError: (err) => toast.error((err as Error).message),
+      },
+    );
+  }
 
   return (
     <div className="h-full flex flex-col">
       <div className="relative h-12 px-4 border-b border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 flex items-center gap-3 shrink-0">
         <ProjectSwitcher currentProjectId={projectId} name={project.name} description={project.description} />
+        {completed && <CompletedBadge />}
         {project.description && (
           <div className="text-xs text-neutral-500 dark:text-neutral-400 truncate max-w-md">{project.description}</div>
         )}
@@ -96,6 +112,17 @@ export function ProjectPage() {
           nonWorkingDays={nonWorkingDays}
           members={members}
         />
+        {canEdit && (
+          <button
+            onClick={toggleCompleted}
+            disabled={setCompleted.isPending}
+            className="flex items-center gap-1 px-1.5 h-6 rounded text-[11px] text-neutral-600 dark:text-neutral-300 bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 whitespace-nowrap disabled:opacity-50"
+            title={completed ? t('projects.reopenHint') : t('projects.markCompletedHint')}
+          >
+            {completed ? <RotateCcw size={12} /> : <CheckCircle2 size={12} />}
+            {completed ? t('projects.reopen') : t('projects.markCompleted')}
+          </button>
+        )}
         <ProjectExportMenu
           projectName={project.name}
           workItems={workItems}

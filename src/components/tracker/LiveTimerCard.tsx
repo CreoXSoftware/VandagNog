@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Play, Square, StickyNote } from 'lucide-react';
 import { toast } from 'sonner';
 import { Textarea } from '@/components/ui/Input';
@@ -7,6 +7,7 @@ import { useActiveTimer, useStartTimer, useStopTimer, pushRecent } from '@/hooks
 import { useTrackerCatalog } from '@/hooks/useTrackerCatalog';
 import { TaskTargetPicker, TaskTargetTrigger, labelForTarget } from './TaskTargetPicker';
 import { formatHMS } from '@/lib/timeFormat';
+import { useServerNow } from '@/lib/serverClock';
 import type { TrackerTarget } from '@/types/db';
 
 interface Props {
@@ -23,13 +24,7 @@ export function LiveTimerCard({ target, setTarget }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [notes, setNotes] = useState('');
   const [showNotes, setShowNotes] = useState(false);
-  const [now, setNow] = useState(Date.now);
-
-  useEffect(() => {
-    if (!active) return;
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [active]);
+  const now = useServerNow(!!active);
 
   const running = !!active;
   const liveElapsed = active ? Math.max(0, now - new Date(active.start_at).getTime()) : 0;

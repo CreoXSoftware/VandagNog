@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Link } from '@tanstack/react-router';
-import { ZoomIn, ZoomOut } from 'lucide-react';
+import { AlertTriangle, ZoomIn, ZoomOut } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -15,7 +15,7 @@ import {
   toDateString,
   type WorkCalendar,
 } from '@/components/gantt/ganttUtils';
-import { packByProject } from '@/lib/workload';
+import { isOverdue, packByProject, type PlacedTask } from '@/lib/workload';
 import type { WorkItem } from '@/types/db';
 import type { WorkloadPerson } from '@/hooks/useWorkloadData';
 
@@ -61,13 +61,19 @@ function headerModeFor(dayWidth: number): HeaderMode {
   return 'month';
 }
 
+// Diagonal stripes for the part of an overdue task that has run past its end date.
+const LATE_TAIL_STYLE: CSSProperties = {
+  backgroundImage:
+    'repeating-linear-gradient(135deg, rgb(239 68 68 / 0.45) 0 4px, rgb(239 68 68 / 0.15) 4px 8px)',
+};
+
 function laneRowHeight(laneCount: number): number {
   return Math.max(30, ROW_PAD * 2 + laneCount * BAR_H + (laneCount - 1) * LANE_GAP);
 }
 
 // Status colouring matches the Gantt's progress/overdue conventions.
 function barColor(item: WorkItem, today: string): string {
-  if (item.end_date && item.end_date < today && item.progress < 100) {
+  if (isOverdue(item, today)) {
     return 'bg-red-500/85 hover:bg-red-500 text-white';
   }
   if (item.progress >= 100) return 'bg-emerald-500/85 hover:bg-emerald-500 text-white';
@@ -78,6 +84,8 @@ function barColor(item: WorkItem, today: string): string {
 export function WorkloadView({ rows, calendar, projectNameById }: Props) {
   const t = useT();
   const today = toDateString(new Date());
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- recompute only when the day changes
+  const todayDate = useMemo(() => startOfDay(new Date()), [today]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
@@ -101,7 +109,9 @@ export function WorkloadView({ rows, calendar, projectNameById }: Props) {
   const allTasks = useMemo(() => rows.flatMap((r) => r.tasks), [rows]);
   const range = useMemo(() => computeRange(allTasks), [allTasks]);
   const viewStart = useMemo(() => addDays(range.start, -PAD_LEFT), [range.start]);
-  const baseDays = range.days + PAD_LEFT + PAD_RIGHT;
+  // Overdue tails run to today, so the axis must always reach it.
+  const rangeDays = Math.max(range.days, diffDays(todayDate, range.start) + 1);
+  const baseDays = rangeDays + PAD_LEFT + PAD_RIGHT;
   const effectiveDays = Math.max(baseDays, Math.ceil(viewportWidth / Math.max(2, dayWidth)));
 
   const offWidth = Math.max(2, Math.round(dayWidth * OFF_RATIO));
@@ -181,7 +191,7 @@ export function WorkloadView({ rows, calendar, projectNameById }: Props) {
   const groups = useMemo(
     () =>
       rows.map((row) => {
-        const projects = packByProject(row.tasks, calendar)
+        const projects = packByProject(row.tasks, todayDate, calendar)
           .map((pr) => ({
             ...pr,
             name: projectNameById.get(pr.projectId) ?? '—',
@@ -193,10 +203,38 @@ export function WorkloadView({ rows, calendar, projectNameById }: Props) {
           projects,
           taskCount: row.tasks.length,
           workDays: projects.reduce((s, p) => s + p.workDays, 0),
+          overdueCount: projects.reduce((s, p) => s + p.overdueCount, 0),
+          lateDays: projects.reduce((s, p) => s + p.lateDays, 0),
         };
       }),
-    [rows, calendar, projectNameById],
+    [rows, calendar, projectNameById, todayDate],
   );
+
+  // Project sub-rows by `${personId}:${projectId}`, for scrolling one into view.
+  const subRowRefs = useRef(new Map<string, HTMLDivElement>());
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!highlightId) return;
+    const timer = window.setTimeout(() => setHighlightId(null), 1600);
+    return () => window.clearTimeout(timer);
+  }, [highlightId]);
+
+  // Bring a person's oldest overdue task into view and pulse it.
+  function jumpToOldestOverdue(personId: string) {
+    const g = groups.find((x) => x.person.user_id === personId);
+    const el = scrollRef.current;
+    if (!g || !el) return;
+    let oldest: { p: PlacedTask; projectId: string } | null = null;
+    for (const pr of g.projects) {
+      for (const p of pr.placed) {
+        if (p.overdue && (!oldest || p.end < oldest.p.end)) oldest = { p, projectId: pr.projectId };
+      }
+    }
+    if (!oldest) return;
+    el.scrollLeft = Math.max(0, axis.xOf(diffDays(oldest.p.start, viewStart)) - 200);
+    subRowRefs.current.get(`${personId}:${oldest.projectId}`)?.scrollIntoView({ block: 'nearest' });
+    setHighlightId(oldest.p.item.id);
+  }
 
   // Header ticks + month band + non-working shading.
   const { months, ticks, offDays } = useMemo(() => {
@@ -236,29 +274,61 @@ export function WorkloadView({ rows, calendar, projectNameById }: Props) {
   const todayX = todayIdx >= 0 && todayIdx <= effectiveDays ? axis.xOf(todayIdx) : null;
   const contentW = PEOPLE_W + axis.total;
 
-  function renderBars(placed: { item: WorkItem; start: Date; end: Date; lane: number }[]) {
+  function renderBars(placed: PlacedTask[]) {
     return placed.map((p) => {
       const startIdx = diffDays(p.start, viewStart);
       const endIdx = diffDays(p.end, viewStart);
-      if (endIdx < 0 || startIdx > effectiveDays - 1) return null;
-      const left = Math.max(0, axis.xOf(startIdx));
-      const right = Math.min(axis.total, axis.xOf(endIdx + 1));
-      const width = Math.max(4, right - left);
+      const visualEndIdx = diffDays(p.visualEnd, viewStart);
+      if (visualEndIdx < 0 || startIdx > effectiveDays - 1) return null;
       const top = ROW_PAD + p.lane * (BAR_H + LANE_GAP);
       const projectName = projectNameById.get(p.item.project_id) ?? '';
-      return (
-        <Link
-          key={p.item.id}
-          to="/projects/$projectId"
-          params={{ projectId: p.item.project_id }}
-          search={{ item: p.item.id, view: 'gantt' }}
-          title={`${p.item.name}${projectName ? ` · ${projectName}` : ''}\n${p.item.start_date} → ${p.item.end_date}`}
-          className={`absolute rounded px-1.5 flex items-center text-[11px] truncate shadow-sm ${barColor(p.item, today)}`}
-          style={{ left, width, top, height: BAR_H }}
-        >
-          <span className="truncate">{p.item.name}</span>
-        </Link>
-      );
+      const title =
+        `${p.item.name}${projectName ? ` · ${projectName}` : ''}\n${p.item.start_date} → ${p.item.end_date}` +
+        (p.overdue ? `\n⚠ ${t('workload.lateTooltip', { days: p.lateDays })}` : '');
+      const link = {
+        to: '/projects/$projectId',
+        params: { projectId: p.item.project_id },
+        search: { item: p.item.id, view: 'gantt' as const },
+        title,
+      };
+      const highlight = highlightId === p.item.id ? 'ring-2 ring-red-400 ring-offset-1 animate-pulse' : '';
+
+      const out = [];
+      if (endIdx >= 0) {
+        const left = Math.max(0, axis.xOf(startIdx));
+        const right = Math.min(axis.total, axis.xOf(endIdx + 1));
+        out.push(
+          <Link
+            key={p.item.id}
+            {...link}
+            className={`absolute rounded px-1.5 flex items-center text-[11px] truncate shadow-sm ${barColor(p.item, today)} ${highlight}`}
+            style={{ left, width: Math.max(4, right - left), top, height: BAR_H }}
+          >
+            <span className="truncate">{p.item.name}</span>
+          </Link>,
+        );
+      }
+      // Carry-forward tail: the day after the planned end through today. If the planned
+      // span is scrolled out of the axis, the tail carries the name instead.
+      if (p.overdue && visualEndIdx > endIdx) {
+        const left = Math.max(0, axis.xOf(Math.max(0, endIdx + 1)));
+        const right = Math.min(axis.total, axis.xOf(visualEndIdx + 1));
+        out.push(
+          <Link
+            key={`${p.item.id}:late`}
+            {...link}
+            className={cn(
+              'absolute rounded-r border border-red-500/70 px-1.5 flex items-center text-[11px] truncate text-red-800 dark:text-red-200 hover:brightness-110',
+              endIdx < 0 ? 'rounded-l' : 'border-l-0',
+              highlight,
+            )}
+            style={{ ...LATE_TAIL_STYLE, left, width: Math.max(4, right - left), top, height: BAR_H }}
+          >
+            {endIdx < 0 && <span className="truncate">{p.item.name}</span>}
+          </Link>,
+        );
+      }
+      return out;
     });
   }
 
@@ -405,8 +475,24 @@ export function WorkloadView({ rows, calendar, projectNameById }: Props) {
                   <span className="text-xs font-semibold truncate text-neutral-800 dark:text-neutral-100">
                     {g.person.display_name}
                   </span>
+                  {g.overdueCount > 0 && (
+                    <button
+                      onClick={() => jumpToOldestOverdue(g.person.user_id)}
+                      title={t('workload.jumpToOverdue')}
+                      className="shrink-0 inline-flex items-center gap-0.5 rounded-full bg-red-100 text-red-700 hover:bg-red-200 dark:bg-red-950 dark:text-red-300 dark:hover:bg-red-900 px-1.5 h-4 text-[10px] font-medium tabular-nums whitespace-nowrap"
+                    >
+                      <AlertTriangle size={10} />
+                      {t('workload.overdueChip', { n: g.overdueCount })}
+                    </button>
+                  )}
                   <span className="ml-auto text-[10px] text-neutral-500 dark:text-neutral-400 tabular-nums whitespace-nowrap">
                     {t('workload.taskSummary', { tasks: g.taskCount, days: g.workDays })}
+                    {g.lateDays > 0 && (
+                      <span className="text-red-600 dark:text-red-400">
+                        {' · '}
+                        {t('workload.lateSuffix', { days: g.lateDays })}
+                      </span>
+                    )}
                   </span>
                 </div>
                 <div style={{ width: axis.total }} />
@@ -416,6 +502,11 @@ export function WorkloadView({ rows, calendar, projectNameById }: Props) {
               {g.projects.map((pr) => (
                 <div
                   key={pr.projectId}
+                  ref={(el) => {
+                    const key = `${g.person.user_id}:${pr.projectId}`;
+                    if (el) subRowRefs.current.set(key, el);
+                    else subRowRefs.current.delete(key);
+                  }}
                   className="flex border-t border-neutral-100 dark:border-neutral-900/80"
                   style={{ height: pr.height }}
                 >
@@ -423,11 +514,24 @@ export function WorkloadView({ rows, calendar, projectNameById }: Props) {
                     className="sticky left-0 z-10 shrink-0 flex items-center gap-1.5 pl-8 pr-3 bg-white dark:bg-neutral-950 border-r border-neutral-200 dark:border-neutral-800"
                     style={{ width: PEOPLE_W }}
                   >
-                    <span className="h-1.5 w-1.5 rounded-full bg-neutral-400 dark:bg-neutral-600 shrink-0" />
+                    <span
+                      className={cn(
+                        'h-1.5 w-1.5 rounded-full shrink-0',
+                        pr.overdueCount > 0 ? 'bg-red-500' : 'bg-neutral-400 dark:bg-neutral-600',
+                      )}
+                    />
                     <span className="text-[11px] truncate text-neutral-700 dark:text-neutral-300" title={pr.name}>
                       {pr.name}
                     </span>
-                    <span className="ml-auto text-[10px] text-neutral-400 dark:text-neutral-500 tabular-nums">
+                    <span
+                      className={cn(
+                        'ml-auto text-[10px] tabular-nums',
+                        pr.overdueCount > 0
+                          ? 'text-red-600 dark:text-red-400 font-medium'
+                          : 'text-neutral-400 dark:text-neutral-500',
+                      )}
+                      title={pr.overdueCount > 0 ? t('workload.overdueChip', { n: pr.overdueCount }) : undefined}
+                    >
                       {pr.placed.length}
                     </span>
                   </div>

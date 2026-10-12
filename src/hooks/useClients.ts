@@ -6,6 +6,8 @@ import { projectKey, projectsKey } from './useProjects';
 export const clientsKey = ['clients'] as const;
 export const visibleClientsKey = ['clients', 'visible'] as const;
 export const projectClientKey = (projectId: string) => ['project_client', projectId] as const;
+// Under the 'project_client' prefix, so client renames refresh it too.
+export const allProjectClientsKey = ['project_client', 'all'] as const;
 
 // All clients in scopes I own/manage: my private + every team I'm in.
 export function useMyClients() {
@@ -49,6 +51,19 @@ export function useProjectClient(projectId: string | undefined) {
         .maybeSingle();
       if (error) throw error;
       return (data as ProjectClientInfo) ?? null;
+    },
+  });
+}
+
+// Every visible project's client in one read, for the Projects list.
+// project_client_view is already scoped by is_member.
+export function useAllProjectClients() {
+  return useQuery({
+    queryKey: allProjectClientsKey,
+    queryFn: async (): Promise<Map<string, ProjectClientInfo>> => {
+      const { data, error } = await supabase.from('project_client_view').select('*');
+      if (error) throw error;
+      return new Map(((data ?? []) as ProjectClientInfo[]).map((c) => [c.project_id, c]));
     },
   });
 }
@@ -135,6 +150,7 @@ export function useSetProjectClient() {
     onSuccess: (_d, input) => {
       qc.invalidateQueries({ queryKey: projectClientKey(input.project_id) });
       qc.invalidateQueries({ queryKey: projectKey(input.project_id) });
+      qc.invalidateQueries({ queryKey: allProjectClientsKey });
       qc.invalidateQueries({ queryKey: projectsKey });
     },
   });

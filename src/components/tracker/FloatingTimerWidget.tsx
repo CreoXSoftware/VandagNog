@@ -12,6 +12,7 @@ import {
 import { useTrackerCatalog } from '@/hooks/useTrackerCatalog';
 import { TaskTargetPicker, labelForTarget } from './TaskTargetPicker';
 import { formatHMS } from '@/lib/timeFormat';
+import { useServerNow } from '@/lib/serverClock';
 import type { TrackerTarget } from '@/types/db';
 
 const POS_KEY = 'vn.tracker.widget.pos.v2';
@@ -33,7 +34,7 @@ export function FloatingTimerWidget() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [target, setTarget] = useState<TrackerTarget | null>(() => readTarget());
   const [pos, setPos] = useState<Pos>(() => readPos());
-  const [now, setNow] = useState<number>(Date.now);
+  const now = useServerNow(!!active);
   const widgetRef = useRef<HTMLDivElement | null>(null);
   const collapsedBtnRef = useRef<HTMLButtonElement | null>(null);
 
@@ -57,13 +58,6 @@ export function FloatingTimerWidget() {
     window.addEventListener('resize', reclamp);
     return () => window.removeEventListener('resize', reclamp);
   }, [collapsed]);
-
-  // Tick when running
-  useEffect(() => {
-    if (!active) return;
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [active]);
 
   // Adopt running entry's target when applicable
   useEffect(() => {

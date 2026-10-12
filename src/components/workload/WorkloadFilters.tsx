@@ -21,6 +21,8 @@ interface Props {
   setSearch: (s: string) => void;
   hideEmpty: boolean;
   setHideEmpty: (v: boolean) => void;
+  overdueOnly: boolean;
+  setOverdueOnly: (v: boolean) => void;
 }
 
 export function WorkloadFilters(props: Props) {
@@ -39,6 +41,8 @@ export function WorkloadFilters(props: Props) {
     setSearch,
     hideEmpty,
     setHideEmpty,
+    overdueOnly,
+    setOverdueOnly,
   } = props;
 
   return (
@@ -98,6 +102,17 @@ export function WorkloadFilters(props: Props) {
           className="h-3.5 w-3.5"
         />
         {t('workload.hideEmpty')}
+      </label>
+
+      {/* Only people with overdue work */}
+      <label className="flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-300 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={overdueOnly}
+          onChange={(e) => setOverdueOnly(e.target.checked)}
+          className="h-3.5 w-3.5"
+        />
+        {t('workload.overdueOnly')}
       </label>
     </div>
   );

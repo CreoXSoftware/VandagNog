@@ -65,7 +65,14 @@ export function TrackerPage() {
 
         <div className="pt-2">
           <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200 mb-2">{t('tracker.sessions')}</h2>
-          <SessionList />
+          <SessionList
+            // The running timer only shows in Live mode, so switch there to
+            // make it obvious the clock started.
+            onResumed={(tg) => {
+              setTarget(tg);
+              setMode('live');
+            }}
+          />
         </div>
       </div>
     </div>

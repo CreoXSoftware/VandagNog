@@ -3,6 +3,8 @@ import { useT } from '@/lib/i18n';
 import { useWorkloadData } from '@/hooks/useWorkloadData';
 import { WorkloadFilters } from '@/components/workload/WorkloadFilters';
 import { WorkloadView, type WorkloadRow } from '@/components/workload/WorkloadView';
+import { toDateString } from '@/components/gantt/ganttUtils';
+import { isOverdue } from '@/lib/workload';
 import type { WorkItem } from '@/types/db';
 
 export function WorkloadPage() {
@@ -14,6 +16,7 @@ export function WorkloadPage() {
   const [teamIds, setTeamIds] = useState<string[]>([]);
   const [search, setSearch] = useState('');
   const [hideEmpty, setHideEmpty] = useState(true);
+  const [overdueOnly, setOverdueOnly] = useState(false);
 
   // People selectable in the filter — narrowed by the team filter so you pick team members.
   const availablePeople = useMemo(() => {
@@ -47,10 +50,18 @@ export function WorkloadPage() {
       else byPerson.set(tk.assignee_id, [tk]);
     }
 
-    let result = people.map((person) => ({ person, tasks: byPerson.get(person.user_id) ?? [] }));
-    if (hideEmpty) result = result.filter((r) => r.tasks.length > 0);
-    return result;
-  }, [data, projectIds, personIds, teamIds, search, hideEmpty]);
+    // People with overdue work first (most overdue at the top); people are already name-sorted.
+    // "Only overdue" narrows each person to their overdue tasks and drops anyone left with none.
+    const today = toDateString(new Date());
+    let result = people.map((person) => {
+      const all = byPerson.get(person.user_id) ?? [];
+      const late = all.filter((tk) => isOverdue(tk, today));
+      return { person, tasks: overdueOnly ? late : all, overdue: late.length };
+    });
+    if (hideEmpty || overdueOnly) result = result.filter((r) => r.tasks.length > 0);
+    result.sort((a, b) => b.overdue - a.overdue);
+    return result.map(({ person, tasks }) => ({ person, tasks }));
+  }, [data, projectIds, personIds, teamIds, search, hideEmpty, overdueOnly]);
 
   const projectNameById = useMemo(
     () => new Map((data?.projects ?? []).map((p) => [p.id, p.name])),
@@ -79,6 +90,8 @@ export function WorkloadPage() {
           setSearch={setSearch}
           hideEmpty={hideEmpty}
           setHideEmpty={setHideEmpty}
+          overdueOnly={overdueOnly}
+          setOverdueOnly={setOverdueOnly}
         />
         <StatusLegend />
       </div>
@@ -119,6 +132,16 @@ function StatusLegend() {
           {t(`gantt.filter.statusValue.${l.key}` as const)}
         </span>
       ))}
+      <span className="inline-flex items-center gap-1">
+        <span
+          className="h-2 w-3 rounded-sm border border-red-500/70"
+          style={{
+            backgroundImage:
+              'repeating-linear-gradient(135deg, rgb(239 68 68 / 0.6) 0 2px, rgb(239 68 68 / 0.15) 2px 4px)',
+          }}
+        />
+        {t('workload.lateTail')}
+      </span>
     </div>
   );
 }

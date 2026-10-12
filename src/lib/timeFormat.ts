@@ -1,8 +1,11 @@
 // Duration / time helpers for the Time Tracker.
 
+import { serverNow } from './serverClock';
+
 export function durationMs(start: string, end: string | null): number {
   const s = new Date(start).getTime();
-  const e = end ? new Date(end).getTime() : Date.now();
+  // A running entry was stamped by the server, so measure it in server time.
+  const e = end ? new Date(end).getTime() : serverNow();
   return Math.max(0, e - s);
 }
 
