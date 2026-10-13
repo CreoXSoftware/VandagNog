@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import * as Popover from '@radix-ui/react-popover';
-import { AlignLeft, Check, Clock, User } from 'lucide-react';
+import * as RD from '@radix-ui/react-dialog';
+import { Check, Clock, User } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
@@ -15,37 +15,34 @@ export interface DurationPreview {
   end: string;
 }
 
+/** The panes the pop-up has. The description is edited in the row itself. */
+export type QuickPane = Exclude<QuickKey, 'd'>;
+
 interface Props {
-  /** Element the popover hangs off — the task's row. */
-  anchor: () => HTMLElement | null | undefined;
   item: WorkItem;
-  mode: QuickKey;
+  mode: QuickPane;
   isParent: boolean;
   members: TasksPerson[];
   durationLabel: string;
   locale: string;
   /** Resolves a duration in working days to the dates it would produce. */
   previewDuration: (workDays: number) => DurationPreview | null;
+  /** Another shortcut pressed in the pop-up — 'd' means the row's description. */
   onModeChange: (mode: QuickKey) => void;
   onClose: () => void;
-  onSaveDescription: (text: string) => void;
   onSaveAssignee: (userId: string | null) => void;
   onSaveDuration: (workDays: number) => void;
 }
 
-// One popover, three panes. The same Alt/⌘ shortcuts that open it switch between
-// panes, committing the current one first — so description → assignee →
-// duration can be filled in one go without touching the mouse.
+// One pop-up in the middle of the screen, two panes. The same Alt/⌘ shortcuts
+// that open it switch between panes, committing the current one first — so
+// assignee → duration can be filled in one go without touching the mouse.
 export function QuickEditPopover(props: Props) {
-  const { anchor, mode, onClose, onModeChange } = props;
+  const { mode, onClose, onModeChange } = props;
   const t = useT();
   // Each pane registers how to commit what it holds, so switching panes or
   // clicking away keeps the typing instead of dropping it.
   const commitRef = useRef<(() => void) | null>(null);
-
-  const virtualRef = useRef({
-    getBoundingClientRect: () => anchor()?.getBoundingClientRect() ?? new DOMRect(),
-  });
 
   function switchTo(next: QuickKey) {
     if (next === mode) return;
@@ -64,32 +61,29 @@ export function QuickEditPopover(props: Props) {
     return true;
   }
 
-  const tabs: { key: QuickKey; icon: React.ReactNode; label: string }[] = [
-    { key: 'd', icon: <AlignLeft size={12} />, label: t('tasks.quick.description') },
+  const tabs: { key: QuickPane; icon: React.ReactNode; label: string }[] = [
     { key: 'a', icon: <User size={12} />, label: t('tasks.quick.assignee') },
     { key: 't', icon: <Clock size={12} />, label: t('tasks.quick.duration') },
   ];
 
   return (
-    <Popover.Root open onOpenChange={(o) => !o && onClose()}>
-      <Popover.Anchor virtualRef={virtualRef} />
-      <Popover.Portal>
-        <Popover.Content
-          side="bottom"
-          align="end"
-          sideOffset={2}
-          collisionPadding={8}
+    <RD.Root open onOpenChange={(o) => !o && onClose()}>
+      <RD.Portal>
+        {/* data-keep-drawer: a click here is about the pop-up, so an open
+            details panel stays open. */}
+        <RD.Overlay data-keep-drawer className="fixed inset-0 z-40 bg-black/20" />
+        <RD.Content
+          data-keep-drawer
+          aria-describedby={undefined}
           // Focus goes back to the row by the outline itself, which knows
           // whether the row still exists.
           onCloseAutoFocus={(e) => e.preventDefault()}
           onPointerDownOutside={() => commitRef.current?.()}
-          className="z-50 w-80 max-w-[calc(100vw-16px)] overflow-hidden rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-lg text-neutral-900 dark:text-neutral-100"
+          className="fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2 w-80 max-w-[calc(100vw-16px)] overflow-hidden rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-xl text-neutral-900 dark:text-neutral-100"
         >
           {/* Equal columns that may shrink: icon + label + shortcut on one line
-              is wider than the card (more so in Afrikaans), and Radix sizes
-              its positioning wrapper to the content's natural width, so an
-              overflowing row also pushes the whole card off-screen. */}
-          <div className="grid grid-cols-3 gap-1 px-2 pt-2">
+              can be wider than the card, more so in Afrikaans. */}
+          <div className="grid grid-cols-2 gap-1 px-2 pt-2">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
@@ -113,17 +107,16 @@ export function QuickEditPopover(props: Props) {
               </button>
             ))}
           </div>
-          <div className="px-2 pt-1 pb-2 text-[11px] text-neutral-500 dark:text-neutral-400 truncate">
+          <RD.Title className="px-2 pt-1 pb-2 text-[11px] font-normal text-neutral-500 dark:text-neutral-400 truncate">
             {props.item.name}
-          </div>
+          </RD.Title>
           <div className="border-t border-neutral-100 dark:border-neutral-800 p-2">
-            {mode === 'd' && <DescriptionPane {...props} commitRef={commitRef} paneKeys={paneKeys} />}
             {mode === 'a' && <AssigneePane {...props} paneKeys={paneKeys} />}
             {mode === 't' && <DurationPane {...props} commitRef={commitRef} paneKeys={paneKeys} />}
           </div>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+        </RD.Content>
+      </RD.Portal>
+    </RD.Root>
   );
 }
 
@@ -131,48 +124,6 @@ type PaneProps = Props & {
   paneKeys: (e: React.KeyboardEvent) => boolean;
   commitRef?: React.MutableRefObject<(() => void) | null>;
 };
-
-function DescriptionPane({ item, onSaveDescription, onClose, paneKeys, commitRef }: PaneProps) {
-  const t = useT();
-  const initial = item.description ?? '';
-  const [text, setText] = useState(initial);
-
-  const commit = () => {
-    if (text.trim() !== initial.trim()) onSaveDescription(text.trim());
-  };
-  useLayoutEffect(() => {
-    if (commitRef) commitRef.current = commit;
-  });
-
-  return (
-    <div>
-      <textarea
-        autoFocus
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onFocus={(e) => {
-          const len = e.currentTarget.value.length;
-          e.currentTarget.setSelectionRange(len, len);
-        }}
-        onKeyDown={(e) => {
-          if (paneKeys(e)) return;
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            commit();
-            if (commitRef) commitRef.current = null;
-            onClose();
-          }
-        }}
-        rows={4}
-        placeholder={t('workItem.descriptionPlaceholder')}
-        className="w-full resize-y rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-950 px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-neutral-300 dark:focus:ring-neutral-600"
-      />
-      <div className="mt-1 text-[10px] break-words text-neutral-400 dark:text-neutral-500">
-        {t('tasks.quick.descriptionHint')}
-      </div>
-    </div>
-  );
-}
 
 function AssigneePane({ item, members, onSaveAssignee, onClose, paneKeys }: PaneProps) {
   const t = useT();

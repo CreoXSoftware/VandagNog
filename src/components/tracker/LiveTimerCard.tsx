@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Play, Square } from 'lucide-react';
 import { toast } from 'sonner';
-import { Input } from '@/components/ui/Input';
 import { useT } from '@/lib/i18n';
 import {
   useActiveTimer,
@@ -9,9 +8,11 @@ import {
   useStopTimer,
   useUpdateActiveTimer,
   pushRecent,
+  type ActiveTimerPatch,
 } from '@/hooks/useTimeEntries';
-import { useTrackerCatalog } from '@/hooks/useTrackerCatalog';
-import { TaskTargetPicker, TaskTargetTrigger } from './TaskTargetPicker';
+import { TaskTargetPicker } from './TaskTargetPicker';
+import { TargetSegments } from './TargetSegments';
+import { NoteInput, type NoteSuggestion } from './NoteInput';
 import { formatHMS } from '@/lib/timeFormat';
 import { useServerNow } from '@/lib/serverClock';
 import type { TrackerTarget } from '@/types/db';
@@ -23,11 +24,11 @@ interface Props {
   header?: React.ReactNode;
 }
 
-// One row: note · client/project/task · elapsed · start/stop. While a timer runs,
-// both the note and the target stay editable and are written to the running entry.
+// Note · elapsed · start/stop on the first row, client › project › task on the
+// second. While a timer runs, both the note and the target stay editable and
+// are written to the running entry.
 export function LiveTimerCard({ target, setTarget, header }: Props) {
   const t = useT();
-  const { data: catalog } = useTrackerCatalog();
   const { data: active } = useActiveTimer();
   const start = useStartTimer();
   const stop = useStopTimer();
@@ -114,15 +115,32 @@ export function LiveTimerCard({ target, setTarget, header }: Props) {
     }
   }
 
+  // An earlier note brings its task along. While running, both go onto the
+  // running entry in one write.
+  async function onSuggestion(s: NoteSuggestion) {
+    setNotes(s.notes);
+    setTarget(s.target);
+    if (!editable || !runningTarget) return;
+    const retarget = targetKey(s.target) !== targetKey(runningTarget);
+    const patch: ActiveTimerPatch = retarget ? { notes: s.notes, ...s.target } : { notes: s.notes };
+    if (retarget) pushRecent(s.target);
+    try {
+      await updateActive.mutateAsync(patch);
+      if (retarget) toast.success(t('tracker.timerRetargeted'));
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
   return (
     <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-3 space-y-2">
       {header}
-      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-        <Input
-          placeholder={t('tracker.notePlaceholder')}
-          aria-label={t('tracker.notesLabel')}
+      <div className="flex items-center gap-2">
+        <NoteInput
           value={notes}
-          onChange={(e) => setNotes(e.target.value)}
+          onChange={setNotes}
+          onPickSuggestion={onSuggestion}
+          target={displayTarget}
           onBlur={saveNotes}
           onKeyDown={(e) => {
             if (e.key !== 'Enter') return;
@@ -130,20 +148,10 @@ export function LiveTimerCard({ target, setTarget, header }: Props) {
             if (running) e.currentTarget.blur();
             else if (target) void onStart();
           }}
-          className="sm:flex-1 min-w-0"
+          className="flex-1 min-w-0"
         />
 
-        <div className="sm:w-[42%] min-w-0">
-          <TaskTargetTrigger
-            value={displayTarget}
-            catalog={catalog}
-            onClick={() => (running && !editable ? undefined : setPickerOpen(true))}
-            onClear={running ? undefined : () => setTarget(null)}
-            title={running ? t('tracker.changeRunningTarget') : undefined}
-          />
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+        <div className="flex items-center gap-2 shrink-0">
           {running && (
             <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" aria-hidden />
           )}
@@ -169,6 +177,16 @@ export function LiveTimerCard({ target, setTarget, header }: Props) {
         </div>
       </div>
 
+      <TargetSegments
+        value={displayTarget}
+        onPick={onPick}
+        onClear={running ? undefined : () => setTarget(null)}
+        onSearch={() => setPickerOpen(true)}
+        // The optimistic row from a just-pressed Start can't be re-targeted yet.
+        disabled={running && !editable}
+        title={running ? t('tracker.changeRunningTarget') : undefined}
+      />
+
       <TaskTargetPicker
         open={pickerOpen}
         onOpenChange={setPickerOpen}
@@ -177,4 +195,8 @@ export function LiveTimerCard({ target, setTarget, header }: Props) {
       />
     </div>
   );
+}
+
+function targetKey(t: TrackerTarget): string {
+  return `${t.project_id}|${t.work_item_id ?? ''}|${t.custom_task_text ?? ''}`;
 }

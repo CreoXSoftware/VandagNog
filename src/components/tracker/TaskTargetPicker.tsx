@@ -420,35 +420,38 @@ function ProjectRow({
 
   return (
     <div className="rounded border border-transparent">
+      {/* The project name opens its tasks — what you usually want; picking
+          the project with no task is the smaller button at the end. */}
       <div className="flex items-center">
         <button
           type="button"
-          onClick={onPickProject}
+          onClick={onToggle}
+          aria-expanded={expanded}
+          title={expanded ? t('tracker.collapseTasks') : t('tracker.expandTasks')}
           className={[
-            'flex-1 flex items-center gap-1.5 px-2 py-2 rounded-l text-sm text-left',
+            'flex-1 min-w-0 flex items-center gap-1.5 px-2 py-2 rounded-l text-sm text-left',
             active ? 'bg-neutral-200 dark:bg-neutral-800' : 'hover:bg-neutral-100 dark:hover:bg-neutral-800',
           ].join(' ')}
         >
+          <span className={['shrink-0 text-neutral-500 dark:text-neutral-400', hasTasks ? '' : 'opacity-40'].join(' ')}>
+            {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          </span>
           <PathSegments parts={showClient ? [project.client_name ?? '—', project.name] : [project.name]} />
           {pinned && <Pin size={11} className="shrink-0 text-amber-600 dark:text-amber-400" fill="currentColor" />}
           {hidden && <HiddenMark />}
-          <span className="ml-auto text-[11px] text-neutral-500 dark:text-neutral-400 shrink-0">
-            {t('tracker.noTask')}
-          </span>
         </button>
         <button
           type="button"
-          onClick={onToggle}
-          aria-label={expanded ? t('tracker.collapseTasks') : t('tracker.expandTasks')}
-          title={expanded ? t('tracker.collapseTasks') : t('tracker.expandTasks')}
+          onClick={onPickProject}
+          title={t('tracker.noTask')}
           className={[
-            'h-9 w-9 rounded-r flex items-center justify-center',
-            'text-neutral-500 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800',
-            hasTasks ? '' : 'opacity-40 cursor-default',
+            'shrink-0 h-9 px-2.5 rounded-r text-[11px]',
+            active
+              ? 'bg-neutral-200 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100'
+              : 'text-neutral-500 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 hover:text-neutral-900 dark:hover:text-neutral-100',
           ].join(' ')}
-          disabled={!hasTasks && !expanded}
         >
-          {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          {t('tracker.noTask')}
         </button>
       </div>
 

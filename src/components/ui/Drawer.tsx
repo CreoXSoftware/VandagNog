@@ -18,7 +18,9 @@ export function Drawer({ open, onClose, title, children, widthClass = 'w-[480px]
   React.useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      // An Escape something else already used (a dialog closing, an edit
+      // being undone) is not for the drawer.
+      if (e.key === 'Escape' && !e.defaultPrevented) onClose();
     };
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target as HTMLElement | null;
@@ -26,7 +28,14 @@ export function Drawer({ open, onClose, title, children, widthClass = 'w-[480px]
       // keep open when interacting with the drawer itself, the work-item
       // widget rows, or the gantt bars (so editing/dragging keeps detail visible)
       if (asideRef.current?.contains(target)) return;
-      if (target.closest('[data-keep-drawer],[data-sonner-toaster]')) return;
+      // Inside a keep area, data-drawer-close marks controls that still count
+      // as a click elsewhere.
+      if (
+        target.closest('[data-keep-drawer],[data-sonner-toaster]') &&
+        !target.closest('[data-drawer-close]')
+      ) {
+        return;
+      }
       onClose();
     };
     window.addEventListener('keydown', onKey);

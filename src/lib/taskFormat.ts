@@ -17,3 +17,9 @@ export function formatRange(start: string | null, end: string | null, locale: st
   const one = s ?? e;
   return one ? one.toLocaleDateString(locale, day) : '—';
 }
+
+// A one-line field can't hold line breaks, so a description that has them is
+// edited in the details panel rather than in the Tasks outline row.
+export function isMultilineDescription(description: string | null | undefined): boolean {
+  return !!description && /[\r\n]/.test(description);
+}

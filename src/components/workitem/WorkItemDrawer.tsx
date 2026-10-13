@@ -33,13 +33,16 @@ interface Props {
   members: ProjectMember[];
   canEdit: boolean;
   autoFocusName?: boolean;
+  /** Put the cursor at the end of the description (and scroll to it). */
+  autoFocusDescription?: boolean;
   initialTab?: 'details' | 'comments';
   onNameFocused?: () => void;
+  onDescriptionFocused?: () => void;
   onClose: () => void;
   onNavigate: (id: string) => void;
 }
 
-export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, nonWorkingDays, members, canEdit, autoFocusName, initialTab, onNameFocused, onClose, onNavigate }: Props) {
+export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, nonWorkingDays, members, canEdit, autoFocusName, autoFocusDescription, initialTab, onNameFocused, onDescriptionFocused, onClose, onNavigate }: Props) {
   const update = useUpdateWorkItem();
   const reschedule = useRescheduleFrom();
   const [tab, setTab] = useState<'details' | 'comments'>(initialTab ?? 'comments');
@@ -202,7 +205,13 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
         </DisabledHint>
 
         <DisabledHint disabled={!canEdit} reason={permReason}>
-          <DescField value={workItem.description ?? ''} disabled={!canEdit} onSave={(v) => patch({ description: v || null })} />
+          <DescField
+            value={workItem.description ?? ''}
+            disabled={!canEdit}
+            autoFocus={autoFocusDescription}
+            onAutoFocused={onDescriptionFocused}
+            onSave={(v) => patch({ description: v || null })}
+          />
         </DisabledHint>
 
         <DisabledHint disabled={!canEdit} reason={permReason}>
@@ -504,14 +513,42 @@ function NameField({
   );
 }
 
-function DescField({ value, disabled, onSave }: { value: string; disabled: boolean; onSave: (v: string) => void }) {
+function DescField({
+  value,
+  disabled,
+  autoFocus,
+  onAutoFocused,
+  onSave,
+}: {
+  value: string;
+  disabled: boolean;
+  autoFocus?: boolean;
+  onAutoFocused?: () => void;
+  onSave: (v: string) => void;
+}) {
   const [v, setV] = useState(value);
   const t = useT();
+  const ref = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => setV(value), [value]);
+  useEffect(() => {
+    if (!autoFocus) return;
+    const el = ref.current;
+    if (el && !disabled) {
+      el.focus();
+      // Next frame: when switching tasks the new text lands a render later.
+      requestAnimationFrame(() => {
+        const n = el.value.length;
+        el.setSelectionRange(n, n);
+      });
+    }
+    // Done either way: a read-only description cannot take the cursor.
+    onAutoFocused?.();
+  }, [autoFocus, disabled, onAutoFocused]);
   return (
     <div>
       <label className="block text-[11px] font-medium text-neutral-600 dark:text-neutral-400 mb-1 uppercase tracking-wide">{t('common.description')}</label>
       <Textarea
+        ref={ref}
         value={v}
         disabled={disabled}
         onChange={(e) => setV(e.target.value)}

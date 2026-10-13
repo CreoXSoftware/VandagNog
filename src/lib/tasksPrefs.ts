@@ -28,6 +28,8 @@ export interface TasksPrefs {
   showDone: boolean;
   /** Hide project groups with nothing in the current time scope. */
   hideEmpty: boolean;
+  /** Each task's description beside its name. */
+  showDescriptions: boolean;
   /** Collapsed project groups. */
   collapsed: string[];
   /** Collapsed summary rows in the outline. */
@@ -42,6 +44,7 @@ export const DEFAULT_TASKS_PREFS: TasksPrefs = {
   search: '',
   showDone: false,
   hideEmpty: true,
+  showDescriptions: true,
   collapsed: [],
   collapsedItems: [],
 };
@@ -69,6 +72,8 @@ export function loadTasksPrefs(): TasksPrefs {
       search: typeof p.search === 'string' ? p.search : '',
       showDone: p.showDone === true,
       hideEmpty: versioned ? p.hideEmpty === true : DEFAULT_TASKS_PREFS.hideEmpty,
+      // On unless turned off, so prefs saved before it existed get the default.
+      showDescriptions: p.showDescriptions !== false,
       collapsed: strArray(p.collapsed),
       collapsedItems: strArray(p.collapsedItems),
     };

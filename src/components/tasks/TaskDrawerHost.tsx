@@ -11,6 +11,9 @@ import type { WorkItem } from '@/types/db';
 interface Props {
   item: WorkItem;
   canEdit: boolean;
+  /** Put the cursor in the description once the editor shows. */
+  focusDescription?: boolean;
+  onDescriptionFocused?: () => void;
   onClose: () => void;
   onNavigate: (id: string) => void;
 }
@@ -23,7 +26,14 @@ interface Props {
 // fetching — projectKey and nonWorkingDaysKey. Cold, its optimistic cascade
 // silently falls back to Mon–Fri with no non-working days, so mounting them
 // before any date edit is possible keeps the cascade correct here.
-export function TaskDrawerHost({ item, canEdit, onClose, onNavigate }: Props) {
+export function TaskDrawerHost({
+  item,
+  canEdit,
+  focusDescription,
+  onDescriptionFocused,
+  onClose,
+  onNavigate,
+}: Props) {
   const t = useT();
   const projectId = item.project_id;
 
@@ -56,6 +66,8 @@ export function TaskDrawerHost({ item, canEdit, onClose, onNavigate }: Props) {
       members={members ?? []}
       canEdit={canEdit}
       initialTab="details"
+      autoFocusDescription={focusDescription}
+      onDescriptionFocused={onDescriptionFocused}
       onClose={onClose}
       onNavigate={onNavigate}
     />

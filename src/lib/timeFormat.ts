@@ -62,6 +62,31 @@ export function sessionRange(
   return { start: s, end: next, nextDay: true };
 }
 
+// A typed session length, in ms: "1:30", "1.5" or "1,5" (hours), "1h30",
+// "1h 30m", "2h", "90m". Null when unreadable or not positive.
+export function parseDurationText(input: string): number | null {
+  const s = input.trim().toLowerCase().replace(',', '.');
+  let minutes: number | null = null;
+  let m: RegExpMatchArray | null;
+  if ((m = s.match(/^(\d+):([0-5]?\d)$/))) {
+    minutes = Number(m[1]) * 60 + Number(m[2]);
+  } else if ((m = s.match(/^(\d+(?:\.\d+)?)\s*h(?:\s*(\d+)\s*m?)?$/))) {
+    minutes = Number(m[1]) * 60 + Number(m[2] ?? 0);
+  } else if ((m = s.match(/^(\d+)\s*m(?:in)?$/))) {
+    minutes = Number(m[1]);
+  } else if ((m = s.match(/^\d+(?:\.\d+)?$/))) {
+    minutes = Number(m[0]) * 60;
+  }
+  if (minutes == null || !Number.isFinite(minutes) || minutes <= 0) return null;
+  return Math.round(minutes) * 60_000;
+}
+
+// The h:mm form parseDurationText reads back.
+export function formatDurationText(ms: number): string {
+  const total = Math.round(ms / 60_000);
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+}
+
 // Calendar days between two moments' local dates (0 = same day).
 export function daysApart(a: Date, b: Date): number {
   const da = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());

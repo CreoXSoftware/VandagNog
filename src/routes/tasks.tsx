@@ -53,6 +53,10 @@ export function TasksPage() {
   const [searchText, setSearchText] = useState(prefs0.search);
   const [showDone, setShowDone] = useState(prefs0.showDone);
   const [hideEmpty, setHideEmpty] = useState(prefs0.hideEmpty);
+  const [showDescriptions, setShowDescriptions] = useState(prefs0.showDescriptions);
+  // The task whose description the details panel should put the cursor in
+  // once it is showing (a click on the description in the outline).
+  const [focusDescFor, setFocusDescFor] = useState<string | null>(null);
   const [syncOpen, setSyncOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set(prefs0.collapsed));
   const [collapsedItems, setCollapsedItems] = useState<Set<string>>(
@@ -82,10 +86,11 @@ export function TasksPage() {
       search: searchText,
       showDone,
       hideEmpty,
+      showDescriptions,
       collapsed: Array.from(collapsed),
       collapsedItems: Array.from(collapsedItems),
     });
-  }, [when, projectIds, assigneeSel, statuses, searchText, showDone, hideEmpty, collapsed, collapsedItems]);
+  }, [when, projectIds, assigneeSel, statuses, searchText, showDone, hideEmpty, showDescriptions, collapsed, collapsedItems]);
 
   // Anything you just created, renamed, ticked, re-assigned or moved stays on
   // screen even if it no longer matches the filters — otherwise typing a task
@@ -368,15 +373,14 @@ export function TasksPage() {
               setShowDone={setShowDone}
               hideEmpty={hideEmpty}
               setHideEmpty={setHideEmpty}
+              showDescriptions={showDescriptions}
+              setShowDescriptions={setShowDescriptions}
             />
           </div>
 
-          {/* data-keep-drawer: Drawer closes on any outside pointerdown, so without
-              this, editing a row or switching tasks would dismiss it. */}
-          <div
-            data-keep-drawer
-            className="flex-1 min-h-0 overflow-y-auto border-t border-neutral-200 dark:border-neutral-800"
-          >
+          {/* The details panel closes on any click outside it, except a click
+              that opens another task's row (see ItemRow). */}
+          <div className="flex-1 min-h-0 overflow-y-auto border-t border-neutral-200 dark:border-neutral-800">
             {isLoading ? (
               <div className="p-6 text-sm text-neutral-500 dark:text-neutral-400">
                 {t('common.loading')}
@@ -407,8 +411,12 @@ export function TasksPage() {
                 collapsedItems={collapsedItems}
                 setCollapsedItems={setCollapsedItems}
                 pin={pin}
+                showDescriptions={showDescriptions}
                 onToggleDone={toggle}
-                onOpen={(item) => select(item.id)}
+                onOpen={(item, focus) => {
+                  setFocusDescFor(focus === 'description' ? item.id : null);
+                  select(item.id);
+                }}
                 onDelete={remove}
               />
             )}
@@ -420,6 +428,8 @@ export function TasksPage() {
         <TaskDrawerHost
           item={selected}
           canEdit={!!data?.editableProjectIds.has(selected.project_id)}
+          focusDescription={focusDescFor === selected.id}
+          onDescriptionFocused={() => setFocusDescFor(null)}
           onClose={() => select(undefined)}
           onNavigate={(id) => select(id)}
         />

@@ -32,7 +32,8 @@ import {
 } from '@/lib/workItemTree';
 import type { Dependency, WorkItem } from '@/types/db';
 import { DraftRow, ItemRow, type DropPos } from './OutlineRow';
-import { QuickEditPopover, type DurationPreview } from './QuickEditPopover';
+import { QuickEditPopover, type DurationPreview, type QuickPane } from './QuickEditPopover';
+import { isMultilineDescription } from '@/lib/taskFormat';
 
 export interface OutlineGroup {
   projectId: string;
@@ -64,8 +65,10 @@ interface Props {
   setCollapsedItems: (update: (prev: Set<string>) => Set<string>) => void;
   /** Keep these ids on screen whatever the filters say, until the filters change. */
   pin: (ids: string[]) => void;
+  showDescriptions: boolean;
   onToggleDone: (item: WorkItem, done: boolean) => void;
-  onOpen: (item: WorkItem) => void;
+  /** Open the details panel; 'description' puts the cursor in it. */
+  onOpen: (item: WorkItem, focus?: 'description') => void;
   onDelete: (item: WorkItem) => void;
 }
 
@@ -77,6 +80,8 @@ interface DraftState {
 }
 
 const DRAFT_KEY = 'draft';
+// Description fields share the inputs map with the names, under their own keys.
+const descKey = (id: string) => `desc:${id}`;
 // How long a requested focus may wait for its row to (re)appear — long enough
 // for an optimistic insert to land, short enough never to surprise anyone.
 const FOCUS_WAIT_MS = 1500;
@@ -115,7 +120,7 @@ export function TaskOutline(props: Props) {
   const reschedule = useRescheduleFrom();
 
   const [draft, setDraft] = useState<DraftState | null>(null);
-  const [popup, setPopup] = useState<{ id: string; mode: QuickKey } | null>(null);
+  const [popup, setPopup] = useState<{ id: string; mode: QuickPane } | null>(null);
   const [drag, setDrag] = useState<{ id: string; projectId: string; subtree: Set<string> } | null>(
     null,
   );
@@ -211,10 +216,32 @@ export function TaskOutline(props: Props) {
     }
   }
 
-  function openPopup(id: string, mode: QuickKey) {
+  function openPopup(id: string, mode: QuickPane) {
     if (pendingFocus.current) window.clearTimeout(pendingFocus.current.timer);
     pendingFocus.current = null;
     setPopup({ id, mode });
+  }
+
+  // Alt+D: into the row's own description field. One with line breaks is
+  // edited in the details panel instead, as is one you may only read. The
+  // item may not have arrived yet (just created from the draft line);
+  // focusKey waits for its row.
+  function editDescription(id: string) {
+    for (const g of groups) {
+      const item = indexByProject.get(g.projectId)?.byId.get(id);
+      if (!item) continue;
+      if (!g.canEdit || isMultilineDescription(item.description)) {
+        props.onOpen(item, 'description');
+        return;
+      }
+      break;
+    }
+    focusKey(descKey(id));
+  }
+
+  function openQuick(id: string, mode: QuickKey) {
+    if (mode === 'd') editDescription(id);
+    else openPopup(id, mode);
   }
 
   function navigate(fromKey: string, dir: -1 | 1) {
@@ -388,7 +415,7 @@ export function TaskOutline(props: Props) {
       settled.current.add(token);
       const id = createFromSpec(spec, name);
       setDraft(null);
-      if (id) openPopup(id, quick);
+      if (id) openQuick(id, quick);
       return;
     }
 
@@ -513,7 +540,8 @@ export function TaskOutline(props: Props) {
     const quick = quickKeyOf(e);
     if (quick) {
       e.preventDefault();
-      if (g.canEdit) openPopup(row.item.id, quick);
+      if (quick === 'd') editDescription(row.item.id);
+      else if (g.canEdit) openPopup(row.item.id, quick);
       return;
     }
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
@@ -541,6 +569,16 @@ export function TaskOutline(props: Props) {
       if (e.shiftKey) outdent(row, g);
       else indent(row, g);
     }
+  }
+
+  function saveDescription(item: WorkItem, text: string) {
+    const next = text.trim() || null;
+    if (next === (item.description ?? null)) return;
+    pin([item.id]);
+    update.mutate(
+      { id: item.id, project_id: item.project_id, patch: { description: next } },
+      { onError: (e) => toast.error((e as Error).message) },
+    );
   }
 
   function rename(item: WorkItem, name: string) {
@@ -779,6 +817,7 @@ export function TaskOutline(props: Props) {
                       today={today}
                       locale={locale}
                       selected={selectedId === r.item.id}
+                      showDescription={props.showDescriptions}
                       isMine={!!me && r.item.assignee_id === me}
                       assignee={r.item.assignee_id ? peopleById.get(r.item.assignee_id) : undefined}
                       durationLabel={
@@ -797,17 +836,22 @@ export function TaskOutline(props: Props) {
                         if (el) inputs.current.set(r.item.id, el);
                         else inputs.current.delete(r.item.id);
                       }}
+                      registerDescInput={(el) => {
+                        if (el) inputs.current.set(descKey(r.item.id), el);
+                        else inputs.current.delete(descKey(r.item.id));
+                      }}
                       registerRow={(el) => {
                         if (el) rowEls.current.set(r.item.id, el);
                         else rowEls.current.delete(r.item.id);
                       }}
                       onCommitName={(name) => rename(r.item, name)}
+                      onCommitDescription={(text) => saveDescription(r.item, text)}
                       onKeyDown={(e) => onRowKey(e, r, g)}
                       onToggleDone={(done) => props.onToggleDone(r.item, done)}
                       onToggleCollapse={() => toggleCollapsed(r.item.id)}
-                      onOpen={() => props.onOpen(r.item)}
+                      onOpen={(focus) => props.onOpen(r.item, focus)}
                       onDelete={() => props.onDelete(r.item)}
-                      onQuick={(mode) => g.canEdit && openPopup(r.item.id, mode)}
+                      onQuick={(mode) => g.canEdit && openQuick(r.item.id, mode)}
                       onDragStart={(e) => onDragStart(e, r, g)}
                       onDragEnd={endDrag}
                       onDragOver={(e) => onDragOver(e, r, g)}
@@ -836,7 +880,6 @@ export function TaskOutline(props: Props) {
       {popup && popupTarget && (
         <QuickEditPopover
           key={popup.id}
-          anchor={() => rowEls.current.get(popup.id)}
           item={popupTarget.item}
           mode={popup.mode}
           isParent={popupTarget.isParent}
@@ -855,9 +898,17 @@ export function TaskOutline(props: Props) {
           }
           locale={locale}
           previewDuration={(days) => durationPlan(popupTarget.item, popupTarget.g, days)}
-          onModeChange={(mode) => setPopup({ id: popup.id, mode })}
+          onModeChange={(mode) => {
+            if (mode !== 'd') {
+              setPopup({ id: popup.id, mode });
+              return;
+            }
+            // Alt+D in the pop-up: on to the row's description once it is gone.
+            const id = popup.id;
+            setPopup(null);
+            requestAnimationFrame(() => editDescription(id));
+          }}
           onClose={closePopup}
-          onSaveDescription={(text) => patch(popupTarget.item, { description: text || null })}
           onSaveAssignee={(userId) => patch(popupTarget.item, { assignee_id: userId })}
           onSaveDuration={(days) => saveDuration(popupTarget.item, popupTarget.g, days)}
         />

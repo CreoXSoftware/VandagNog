@@ -30,6 +30,8 @@ interface Props {
   setShowDone: (v: boolean) => void;
   hideEmpty: boolean;
   setHideEmpty: (v: boolean) => void;
+  showDescriptions: boolean;
+  setShowDescriptions: (v: boolean) => void;
 }
 
 export function TaskFilters(props: Props) {
@@ -53,6 +55,8 @@ export function TaskFilters(props: Props) {
     setShowDone,
     hideEmpty,
     setHideEmpty,
+    showDescriptions,
+    setShowDescriptions,
   } = props;
 
   return (
@@ -155,6 +159,19 @@ export function TaskFilters(props: Props) {
           className="h-3.5 w-3.5"
         />
         {t('tasks.hideEmpty')}
+      </label>
+
+      <label
+        className="flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-300 cursor-pointer select-none"
+        title={t('tasks.showDescriptionsHint')}
+      >
+        <input
+          type="checkbox"
+          checked={showDescriptions}
+          onChange={(e) => setShowDescriptions(e.target.checked)}
+          className="h-3.5 w-3.5"
+        />
+        {t('tasks.showDescriptions')}
       </label>
     </div>
   );
