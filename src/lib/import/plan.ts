@@ -31,8 +31,6 @@ export interface DirPerson {
 export interface DirClient {
   id: string;
   name: string;
-  scope: 'private' | 'team';
-  teamName: string | null;
 }
 
 export interface DirWorkItem {
@@ -49,9 +47,12 @@ export interface Directory {
   people: DirPerson[];
   clients: DirClient[];
   workItems: DirWorkItem[];
-  /** People who share at least one team with me — the ones I may add to my projects. */
-  teammateIds: Set<string>;
-  teams: { id: string; name: string }[];
+  /** The organization being imported into: new clients and projects go here. */
+  orgId: string;
+  /** Members of that org (not guests): they can already see every project in it. */
+  orgMemberIds: Set<string>;
+  /** Everyone in that org, guests too: the people I may add to my projects. */
+  orgPeopleIds: Set<string>;
 }
 
 export interface ExistingEntry {
@@ -79,7 +80,7 @@ export type ProjectDecision =
 
 export type ClientDecision =
   | { kind: 'existing'; clientId: string }
-  | { kind: 'create'; name: string; teamId: string | null }
+  | { kind: 'create'; name: string }
   | { kind: 'none' }
   | null;
 
@@ -243,7 +244,7 @@ export function buildGroups(file: ParsedFile, dir: Directory): Groups {
  * Anything ambiguous or merely similar starts undecided, so the import cannot
  * run until the user has looked at it.
  */
-export function initialDecisions(groups: Groups, dir: Directory): Decisions {
+export function initialDecisions(groups: Groups): Decisions {
   const projects: Decisions['projects'] = {};
   const taskMode: Decisions['taskMode'] = {};
   for (const g of groups.projects) {
@@ -254,11 +255,10 @@ export function initialDecisions(groups: Groups, dir: Directory): Decisions {
     else projects[g.key] = null;
   }
 
-  const defaultTeam = dir.teams.length === 1 ? dir.teams[0].id : null;
   const clients: Decisions['clients'] = {};
   for (const c of groups.clients) {
     if (c.reason === 'exact') clients[c.key] = { kind: 'existing', clientId: c.exact[0].item.id };
-    else if (c.reason === 'new') clients[c.key] = { kind: 'create', name: c.name.trim(), teamId: defaultTeam };
+    else if (c.reason === 'new') clients[c.key] = { kind: 'create', name: c.name.trim() };
     else clients[c.key] = null;
   }
 
@@ -309,7 +309,6 @@ export interface NewProject {
 export interface NewClient {
   key: string;
   name: string;
-  teamId: string | null;
 }
 
 export interface Plan {
@@ -401,7 +400,7 @@ export function computePlan(
       else if (cd.kind === 'create' && cd.name.trim()) {
         const nk = normName(cd.name);
         client = { kind: 'create', key: nk };
-        if (!newClients.has(nk)) newClients.set(nk, { key: nk, name: cd.name.trim(), teamId: cd.teamId });
+        if (!newClients.has(nk)) newClients.set(nk, { key: nk, name: cd.name.trim() });
       } else if (cd.kind === 'create') undecidedClients.add(ck);
     }
     newProjects.set(key, { key, name, client });
@@ -434,11 +433,12 @@ export function computePlan(
     if (ref.kind === 'existing') {
       const p = projectById.get(ref.id)!;
       if (!p.memberIds.has(userId)) {
-        if (d.addMembers && p.myRole === 'owner' && dir.teammateIds.has(userId)) willAddMember = true;
+        if (d.addMembers && p.myRole === 'owner' && dir.orgPeopleIds.has(userId)) willAddMember = true;
         else return { ...base, status: 'not_member', project: ref, userId };
       }
-    } else if (userId !== dir.me) {
-      if (d.addMembers && dir.teammateIds.has(userId)) willAddMember = true;
+    } else if (userId !== dir.me && !dir.orgMemberIds.has(userId)) {
+      // A new project: org members see it anyway; a guest needs adding.
+      if (d.addMembers && dir.orgPeopleIds.has(userId)) willAddMember = true;
       else return { ...base, status: 'not_member', project: ref, userId };
     }
 

@@ -2,9 +2,10 @@ import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { buildCalendar, type WorkCalendar } from '@/components/gantt/ganttUtils';
 import { displayName } from '@/lib/userDisplay';
+import { useCurrentOrg } from '@/lib/currentOrg';
 import { leafItemIds } from '@/lib/workload';
-import { useMyTeams } from './useTeams';
-import type { TeamMember, WorkItem } from '@/types/db';
+import { fetchOrgProjectMembers } from './useOrgs';
+import type { WorkItem } from '@/types/db';
 
 export interface WorkloadPerson {
   user_id: string;
@@ -12,6 +13,8 @@ export interface WorkloadPerson {
   email: string | null;
   first_name: string | null;
   last_name: string | null;
+  /** A guest of the organization (sees only projects shared with them). */
+  is_guest: boolean;
 }
 
 export interface WorkloadProjectInfo {
@@ -19,87 +22,68 @@ export interface WorkloadProjectInfo {
   name: string;
 }
 
-export interface WorkloadTeamInfo {
-  id: string;
-  name: string;
-}
-
 export interface WorkloadData {
-  /** People in one of my teams (Rule A). */
+  /** Everyone with access to a project of the current organization that I can see. */
   people: WorkloadPerson[];
-  /** Leaf, dated tasks assigned to a visible person, in projects I belong to (Rule B). */
+  /** Leaf, dated tasks assigned to one of those people, in those projects. */
   tasks: WorkItem[];
-  /** Projects I can see — for the project filter. */
+  /** Projects I can see in the current organization — for the project filter. */
   projects: WorkloadProjectInfo[];
-  /** My teams — for the team filter. */
-  teams: WorkloadTeamInfo[];
-  /** team_id -> member user_ids, for the team filter. */
-  teamMembership: Record<string, string[]>;
   /** Shared working calendar (union of project calendars) for axis + load math. */
   calendar: WorkCalendar;
 }
 
-export const workloadDataKey = (teamIds: string[]) => ['workload', 'data', teamIds] as const;
+export const workloadDataKey = (orgId: string) => ['workload', 'data', orgId] as const;
 
-// Assembles the workload dataset. Mirrors useTrackerCatalog: a handful of RLS-gated
-// reads run in parallel. RLS on work_items/projects already limits rows to projects
-// the current user belongs to, so Rule B ("only tasks in my projects") is enforced
-// server-side; the people axis is built strictly from my team members (Rule A).
+// Assembles the workload dataset of the current organization. Mirrors
+// useTasksData: RLS limits projects and items to what I can see, and the people
+// axis is everyone with access to those projects (org members and the guests
+// they were shared with), so a task's assignee always has a row.
 export function useWorkloadData() {
-  const { data: myTeams } = useMyTeams();
-  const teamIds = (myTeams ?? []).map((t) => t.id).sort();
-
+  const { org } = useCurrentOrg();
   return useQuery({
-    queryKey: workloadDataKey(teamIds),
-    enabled: !!myTeams,
+    queryKey: workloadDataKey(org.id),
     queryFn: async (): Promise<WorkloadData> => {
-      const teamList = myTeams ?? [];
-
-      // People axis (Rule A): union of members across my teams.
-      const memberLists = await Promise.all(
-        teamList.map((tm) =>
-          supabase
-            .rpc('team_members_list', { p_team: tm.id })
-            .then((r) => ({ teamId: tm.id, rows: (r.data ?? []) as TeamMember[] })),
-        ),
-      );
-      const peopleById = new Map<string, WorkloadPerson>();
-      const teamMembership: Record<string, string[]> = {};
-      for (const { teamId, rows } of memberLists) {
-        teamMembership[teamId] = rows.map((m) => m.user_id);
-        for (const m of rows) {
-          if (peopleById.has(m.user_id)) continue;
-          peopleById.set(m.user_id, {
-            user_id: m.user_id,
-            display_name: displayName(m),
-            email: m.email ?? null,
-            first_name: m.first_name ?? null,
-            last_name: m.last_name ?? null,
-          });
-        }
-      }
-      const peopleSet = new Set(peopleById.keys());
-
-      // Projects, work items, non-working days — all RLS-gated to projects I belong to.
-      const [pRes, wRes, nRes] = await Promise.all([
-        supabase
-          .from('projects')
-          .select('id,name,working_days')
-          .is('deleted_at', null)
-          .order('name', { ascending: true }),
-        supabase
-          .from('work_items')
-          .select(
-            'id,project_id,parent_id,level,name,start_date,end_date,assignee_id,progress,created_by',
-          )
-          .is('deleted_at', null),
-        supabase.from('non_working_days').select('start_date,end_date'),
-      ]);
+      const pRes = await supabase
+        .from('projects')
+        .select('id,name,working_days')
+        .eq('org_id', org.id)
+        .is('deleted_at', null)
+        .order('name', { ascending: true });
       if (pRes.error) throw pRes.error;
+      const projects = (pRes.data ?? []) as { id: string; name: string; working_days: number[] }[];
+      const projectIds = projects.map((p) => p.id);
+
+      const empty = { data: [], error: null };
+      const [wRes, nRes, access] = await Promise.all([
+        projectIds.length
+          ? supabase
+              .from('work_items')
+              .select('id,project_id,parent_id,level,name,start_date,end_date,assignee_id,progress,created_by')
+              .in('project_id', projectIds)
+              .is('deleted_at', null)
+          : empty,
+        projectIds.length
+          ? supabase.from('non_working_days').select('start_date,end_date').in('project_id', projectIds)
+          : empty,
+        fetchOrgProjectMembers(org.id),
+      ]);
       if (wRes.error) throw wRes.error;
       if (nRes.error) throw nRes.error;
 
-      const projects = (pRes.data ?? []) as { id: string; name: string; working_days: number[] }[];
+      const peopleById = new Map<string, WorkloadPerson>();
+      for (const m of access) {
+        if (peopleById.has(m.user_id)) continue;
+        peopleById.set(m.user_id, {
+          user_id: m.user_id,
+          display_name: displayName(m),
+          email: m.email ?? null,
+          first_name: m.first_name ?? null,
+          last_name: m.last_name ?? null,
+          is_guest: m.org_role === 'guest',
+        });
+      }
+
       const allItems = (wRes.data ?? []) as WorkItem[];
       const nonWorking = (nRes.data ?? []) as { start_date: string; end_date: string }[];
 
@@ -110,7 +94,7 @@ export function useWorkloadData() {
           !!it.start_date &&
           !!it.end_date &&
           !!it.assignee_id &&
-          peopleSet.has(it.assignee_id),
+          peopleById.has(it.assignee_id),
       );
 
       // Shared calendar: union of working days across visible projects (default Mon–Fri).
@@ -125,8 +109,6 @@ export function useWorkloadData() {
         ),
         tasks,
         projects: projects.map((p) => ({ id: p.id, name: p.name })),
-        teams: teamList.map((t) => ({ id: t.id, name: t.name })),
-        teamMembership,
         calendar,
       };
     },

@@ -35,6 +35,8 @@ import { toast } from 'sonner';
 import { cn, formatDate } from '@/lib/utils';
 import { parseDate } from '@/components/gantt/ganttUtils';
 import { useT } from '@/lib/i18n';
+import { useCurrentOrg } from '@/lib/currentOrg';
+import { useOrgName } from '@/lib/orgDisplay';
 import {
   loadProjectsPrefs,
   NO_CLIENT,
@@ -91,6 +93,10 @@ function compareRows(sort: ProjectSort): (a: Row, b: Row) => number {
 
 export function ProjectsListPage() {
   const t = useT();
+  const { org } = useCurrentOrg();
+  const orgName = useOrgName();
+  // Guests only see what was shared with them and can't add projects.
+  const canCreate = org.my_role !== 'guest';
   const { data: projects = [], isLoading } = useProjects();
   // Shared with the Tasks page: one cached fetch of every work item and every
   // project's members, which is what the member, "mine" and progress columns
@@ -128,7 +134,7 @@ export function ProjectsListPage() {
         stats: statsById.get(p.id) ?? EMPTY_PROJECT_STATS,
         clientId: clients?.get(p.id)?.client_id ?? null,
         clientName: clients?.get(p.id)?.client_name ?? null,
-        memberIds: tasks?.membership[p.id] ?? [],
+        memberIds: tasks?.projectTeam[p.id] ?? [],
         pinned: !!pref?.pinned_at,
         hidden: !!pref?.hidden_at,
         canEdit: tasks?.editableProjectIds.has(p.id) ?? false,
@@ -266,19 +272,20 @@ export function ProjectsListPage() {
         <div className="flex items-start justify-between gap-3 mb-4">
           <div>
             <h1 className="text-xl font-semibold">{t('projects.title')}</h1>
-            {projects.length > 0 && (
-              <div className="text-xs text-neutral-500 dark:text-neutral-400">
-                {t('projects.showing', { shown, total: projects.length })}
-              </div>
-            )}
+            <div className="text-xs text-neutral-500 dark:text-neutral-400">
+              {orgName(org)}
+              {projects.length > 0 && <> · {t('projects.showing', { shown, total: projects.length })}</>}
+            </div>
           </div>
-          <NewProjectDialog />
+          {canCreate && <NewProjectDialog />}
         </div>
         {!isLoading && projects.length === 0 ? (
           <div className="border border-dashed border-neutral-300 dark:border-neutral-700 rounded-lg p-10 text-center">
             <div className="text-neutral-700 dark:text-neutral-200 font-medium mb-1">{t('projects.noneYet')}</div>
-            <div className="text-sm text-neutral-500 dark:text-neutral-400 mb-4">{t('projects.createToStart')}</div>
-            <NewProjectDialog />
+            <div className="text-sm text-neutral-500 dark:text-neutral-400 mb-4">
+              {canCreate ? t('projects.createToStart') : t('projects.guestNone', { org: orgName(org) })}
+            </div>
+            {canCreate && <NewProjectDialog />}
           </div>
         ) : (
           <>

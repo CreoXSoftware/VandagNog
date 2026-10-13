@@ -1,11 +1,7 @@
-import { FolderKanban, Search, User, Users } from 'lucide-react';
+import { FolderKanban, Search, User } from 'lucide-react';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { useT } from '@/lib/i18n';
-import type {
-  WorkloadPerson,
-  WorkloadProjectInfo,
-  WorkloadTeamInfo,
-} from '@/hooks/useWorkloadData';
+import type { WorkloadPerson, WorkloadProjectInfo } from '@/hooks/useWorkloadData';
 
 interface Props {
   projects: WorkloadProjectInfo[];
@@ -14,9 +10,10 @@ interface Props {
   people: WorkloadPerson[];
   personIds: string[];
   setPersonIds: (ids: string[]) => void;
-  teams: WorkloadTeamInfo[];
-  teamIds: string[];
-  setTeamIds: (ids: string[]) => void;
+  /** Any guest in the data — the toggle only shows when there is something to toggle. */
+  hasGuests: boolean;
+  showGuests: boolean;
+  setShowGuests: (v: boolean) => void;
   search: string;
   setSearch: (s: string) => void;
   hideEmpty: boolean;
@@ -34,9 +31,9 @@ export function WorkloadFilters(props: Props) {
     people,
     personIds,
     setPersonIds,
-    teams,
-    teamIds,
-    setTeamIds,
+    hasGuests,
+    showGuests,
+    setShowGuests,
     search,
     setSearch,
     hideEmpty,
@@ -81,16 +78,20 @@ export function WorkloadFilters(props: Props) {
         clearLabel={t('workload.clear')}
       />
 
-      {/* Team filter */}
-      {teams.length > 0 && (
-        <MultiSelect
-          icon={<Users size={11} />}
-          label={t('workload.team')}
-          items={teams.map((tm) => ({ id: tm.id, label: tm.name }))}
-          selected={teamIds}
-          setSelected={setTeamIds}
-          clearLabel={t('workload.clear')}
-        />
+      {/* Guests of the organization */}
+      {hasGuests && (
+        <label
+          className="flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-300 cursor-pointer select-none"
+          title={t('workload.showGuestsHint')}
+        >
+          <input
+            type="checkbox"
+            checked={showGuests}
+            onChange={(e) => setShowGuests(e.target.checked)}
+            className="h-3.5 w-3.5"
+          />
+          {t('workload.showGuests')}
+        </label>
       )}
 
       {/* Hide empty */}

@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { workItemsKey } from './useWorkItems';
 import { dependenciesKey } from './useDependencies';
-import { membersKey, projectTeamsKey } from './useMembers';
+import { membersKey } from './useMembers';
 import { nonWorkingDaysKey } from './useNonWorkingDays';
 import { projectKey } from './useProjects';
 import { recentLocalWorkItemMutation } from '@/lib/localMutationGuard';
@@ -49,14 +49,6 @@ export function useProjectRealtime(projectId: string | undefined) {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'project_members', filter: `project_id=eq.${projectId}` },
         () => qc.invalidateQueries({ queryKey: membersKey(projectId) }),
-      )
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'project_teams', filter: `project_id=eq.${projectId}` },
-        () => {
-          qc.invalidateQueries({ queryKey: projectTeamsKey(projectId) });
-          qc.invalidateQueries({ queryKey: membersKey(projectId) });
-        },
       )
       .on(
         'postgres_changes',

@@ -261,11 +261,14 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
                 className="flex-1"
               >
                 <option value="">{t('workItem.unassigned')}</option>
-                {members.map((m) => (
-                  <option key={m.user_id} value={m.user_id}>
-                    {displayName(m)}
-                  </option>
-                ))}
+                {/* People who can work on it: viewers can't update a task. */}
+                {members
+                  .filter((m) => m.role !== 'viewer' || m.user_id === workItem.assignee_id)
+                  .map((m) => (
+                    <option key={m.user_id} value={m.user_id}>
+                      {displayName(m)}
+                    </option>
+                  ))}
               </Select>
             </DisabledHint>
           </div>

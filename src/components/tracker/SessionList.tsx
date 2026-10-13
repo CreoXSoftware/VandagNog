@@ -9,7 +9,8 @@ import {
   useMyTimeEntries,
   useStartTimer,
 } from '@/hooks/useTimeEntries';
-import { useTrackerCatalog, workItemPath, type TrackerCatalog } from '@/hooks/useTrackerCatalog';
+import { entryInOrg, useTrackerCatalog, workItemPath, type TrackerCatalog } from '@/hooks/useTrackerCatalog';
+import { useCurrentOrg } from '@/lib/currentOrg';
 import { durationMs, formatHM, formatWeekLabel, formatDateHuman, weekStartIso, isoDate } from '@/lib/timeFormat';
 import type { TimeEntry, TrackerTarget } from '@/types/db';
 import { SessionEditDialog } from './SessionEditDialog';
@@ -22,7 +23,13 @@ interface Props {
 export function SessionList({ onResumed }: Props) {
   const t = useT();
   const { data: catalog } = useTrackerCatalog();
-  const { data: entries = [] } = useMyTimeEntries();
+  const { org } = useCurrentOrg();
+  const { data: allEntries = [] } = useMyTimeEntries();
+  // My sessions in the current organization.
+  const entries = useMemo(
+    () => (catalog ? allEntries.filter((e) => entryInOrg(e.project_id, catalog, org.id)) : allEntries),
+    [allEntries, catalog, org.id],
+  );
   const { data: active } = useActiveTimer();
   const del = useDeleteTimeEntry();
   const start = useStartTimer();
@@ -34,7 +41,7 @@ export function SessionList({ onResumed }: Props) {
     if (active && groupKey(active) === groupKey(target)) return 'running';
     // Imported or old entries can point at a project or task you no longer
     // have; start_time_entry would reject those.
-    if (!catalog.projects.some((p) => p.id === target.project_id)) return 'unavailable';
+    if (!catalog.projects.some((p) => p.id === target.project_id && p.org_id === org.id)) return 'unavailable';
     if (target.work_item_id && !catalog.workItems.some((w) => w.id === target.work_item_id)) {
       return 'unavailable';
     }

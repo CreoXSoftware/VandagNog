@@ -15,8 +15,8 @@ import { ProjectPage } from '@/routes/project';
 import { InvitePage } from '@/routes/invite';
 import { AuthCallbackPage } from '@/routes/authCallback';
 import { ProfilePage } from '@/routes/profile';
-import { TeamsListPage } from '@/routes/teams';
-import { TeamPage } from '@/routes/team';
+import { OrgsListPage } from '@/routes/orgs';
+import { OrgPage } from '@/routes/org';
 import { ClientsListPage } from '@/routes/clients';
 import { TrackerPage } from '@/routes/tracker';
 import { TrackerReportsPage } from '@/routes/trackerReports';
@@ -85,23 +85,38 @@ const profileRoute = createRoute({
   component: ProfilePage,
 });
 
-interface TeamsSearch {
+interface OrgsSearch {
+  /** An invite code from a shared link: join that org on arrival. */
   join?: string;
 }
 
-const teamsListRoute = createRoute({
-  getParentRoute: () => appLayoutRoute,
-  path: '/teams',
-  validateSearch: (s: Record<string, unknown>): TeamsSearch => ({
-    join: typeof s.join === 'string' ? s.join : undefined,
-  }),
-  component: TeamsListPage,
+const validateOrgsSearch = (s: Record<string, unknown>): OrgsSearch => ({
+  join: typeof s.join === 'string' ? s.join : undefined,
 });
 
-const teamRoute = createRoute({
+const orgsListRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
-  path: '/teams/$teamId',
-  component: TeamPage,
+  path: '/orgs',
+  validateSearch: validateOrgsSearch,
+  component: OrgsListPage,
+});
+
+const orgRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/orgs/$orgId',
+  component: OrgPage,
+});
+
+// Old team invite links (/teams?join=CODE): the CreoX organization kept the
+// CreoX team's code, so send them on to the organization join.
+const legacyTeamsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/teams',
+  validateSearch: validateOrgsSearch,
+  beforeLoad: ({ search }) => {
+    throw redirect({ to: '/orgs', search: { join: search.join } });
+  },
+  component: () => null,
 });
 
 const clientsListRoute = createRoute({
@@ -167,7 +182,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   authCallbackRoute,
   inviteRoute,
-  appLayoutRoute.addChildren([indexRoute, tasksRoute, projectsListRoute, profileRoute, projectRoute, teamsListRoute, teamRoute, clientsListRoute, trackerRoute, trackerReportsRoute, workloadRoute]),
+  appLayoutRoute.addChildren([indexRoute, tasksRoute, projectsListRoute, profileRoute, projectRoute, orgsListRoute, orgRoute, legacyTeamsRoute, clientsListRoute, trackerRoute, trackerReportsRoute, workloadRoute]),
 ]);
 
 export function createAppRouter(queryClient: QueryClient) {

@@ -40,27 +40,11 @@ export function TrackerPage() {
         </div>
         <TimeImportDialog open={importOpen} onOpenChange={setImportOpen} />
 
-        <div className="inline-flex bg-neutral-100 dark:bg-neutral-800 rounded p-0.5">
-          {(['live', 'manual'] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className={cn(
-                'px-3 h-7 text-xs rounded',
-                mode === m
-                  ? 'bg-white dark:bg-neutral-900 shadow-sm text-neutral-900 dark:text-neutral-100'
-                  : 'text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-700',
-              )}
-            >
-              {t(m === 'live' ? 'tracker.modeLive' : 'tracker.modeManual')}
-            </button>
-          ))}
-        </div>
-
+        {/* The Live / Manual switch is the first row inside whichever card shows. */}
         {mode === 'live' ? (
-          <LiveTimerCard target={target} setTarget={setTarget} />
+          <LiveTimerCard target={target} setTarget={setTarget} header={<ModeSwitch mode={mode} setMode={setMode} />} />
         ) : (
-          <ManualEntryForm target={target} setTarget={setTarget} />
+          <ManualEntryForm target={target} setTarget={setTarget} header={<ModeSwitch mode={mode} setMode={setMode} />} />
         )}
 
         <div className="pt-2">
@@ -75,6 +59,30 @@ export function TrackerPage() {
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+function ModeSwitch({ mode, setMode }: { mode: Mode; setMode: (m: Mode) => void }) {
+  const t = useT();
+  return (
+    <div className="inline-flex bg-neutral-100 dark:bg-neutral-800 rounded p-0.5">
+      {(['live', 'manual'] as const).map((m) => (
+        <button
+          key={m}
+          type="button"
+          onClick={() => setMode(m)}
+          aria-pressed={mode === m}
+          className={cn(
+            'px-3 h-7 text-xs rounded',
+            mode === m
+              ? 'bg-white dark:bg-neutral-900 shadow-sm text-neutral-900 dark:text-neutral-100'
+              : 'text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-700',
+          )}
+        >
+          {t(m === 'live' ? 'tracker.modeLive' : 'tracker.modeManual')}
+        </button>
+      ))}
     </div>
   );
 }

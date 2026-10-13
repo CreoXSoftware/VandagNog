@@ -7,10 +7,12 @@ import {
   useStartTimer,
   useStopTimer,
   useTimeEntriesRealtime,
+  useUpdateActiveTimer,
   pushRecent,
 } from '@/hooks/useTimeEntries';
 import { useTrackerCatalog } from '@/hooks/useTrackerCatalog';
-import { TaskTargetPicker, labelForTarget } from './TaskTargetPicker';
+import { TaskTargetPicker, TargetPathText, labelForTarget } from './TaskTargetPicker';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/Tooltip';
 import { formatHMS } from '@/lib/timeFormat';
 import { useServerNow } from '@/lib/serverClock';
 import type { TrackerTarget } from '@/types/db';
@@ -29,6 +31,7 @@ export function FloatingTimerWidget() {
   const { data: catalog } = useTrackerCatalog();
   const start = useStartTimer();
   const stop = useStopTimer();
+  const updateActive = useUpdateActiveTimer();
 
   const [collapsed, setCollapsed] = useState<boolean>(() => readBool(COLLAPSED_KEY, true));
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -59,15 +62,20 @@ export function FloatingTimerWidget() {
     return () => window.removeEventListener('resize', reclamp);
   }, [collapsed]);
 
-  // Adopt running entry's target when applicable
-  useEffect(() => {
-    if (!active) return;
+  // Adopt the running entry's target, including a re-target made elsewhere (e.g.
+  // the Tracker page). Adjusted during render rather than in an effect.
+  const activeKey = active
+    ? `${active.id}|${active.project_id}|${active.work_item_id ?? ''}|${active.custom_task_text ?? ''}`
+    : null;
+  const [adoptedKey, setAdoptedKey] = useState<string | null>(null);
+  if (active && activeKey !== adoptedKey) {
+    setAdoptedKey(activeKey);
     setTarget({
       project_id: active.project_id,
       work_item_id: active.work_item_id,
       custom_task_text: active.custom_task_text,
     });
-  }, [active?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }
 
   const elapsedMs = active ? Math.max(0, now - new Date(active.start_at).getTime()) : 0;
   const running = !!active;
@@ -135,6 +143,22 @@ export function FloatingTimerWidget() {
       toast.error((e as Error).message);
     }
   }
+  // While running, picking re-targets the running session as a whole.
+  async function onPick(tg: TrackerTarget) {
+    setTarget(tg);
+    if (!active) return;
+    pushRecent(tg);
+    try {
+      await updateActive.mutateAsync({
+        project_id: tg.project_id,
+        work_item_id: tg.work_item_id,
+        custom_task_text: tg.custom_task_text,
+      });
+      toast.success(t('tracker.timerRetargeted'));
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
 
   // ---- Render -------------------------------------------------------------
   const base = 'fixed z-50 select-none shadow-lg';
@@ -193,22 +217,32 @@ export function FloatingTimerWidget() {
             <Minus size={14} />
           </button>
 
-          <button
-            type="button"
-            data-no-drag
-            onClick={() => setPickerOpen(true)}
-            disabled={running}
-            title={running ? t('tracker.cannotChangeRunning') : t('tracker.pickTarget')}
-            className="h-8 max-w-[180px] min-w-0 px-2 rounded-full text-xs text-left hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-70 disabled:cursor-default truncate"
-          >
-            {label ? (
-              <span className="truncate block text-neutral-900 dark:text-neutral-100">
-                {label[label.length - 1]}
-              </span>
-            ) : (
-              <span className="text-neutral-400 dark:text-neutral-500">{t('tracker.pickTarget')}</span>
-            )}
-          </button>
+          {/* Only the last segment fits, so hovering shows the full path. */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+            <button
+              type="button"
+              data-no-drag
+              onClick={() => setPickerOpen(true)}
+              disabled={active?.id === '__optimistic__'}
+              className="h-8 max-w-[180px] min-w-0 px-2 rounded-full text-xs text-left hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-70 disabled:cursor-default truncate"
+            >
+              {label ? (
+                <span className="truncate block text-neutral-900 dark:text-neutral-100">
+                  {label[label.length - 1]}
+                </span>
+              ) : (
+                <span className="text-neutral-400 dark:text-neutral-500">{t('tracker.pickTarget')}</span>
+              )}
+            </button>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-md break-words">
+              {label && <TargetPathText parts={label} />}
+              <div className={label ? 'mt-1 opacity-70' : ''}>
+                {running ? t('tracker.changeRunningTarget') : t('tracker.pickTarget')}
+              </div>
+            </TooltipContent>
+          </Tooltip>
 
           <div className="font-mono text-sm tabular-nums px-2 text-neutral-900 dark:text-neutral-100">
             {formatHMS(elapsedMs)}
@@ -248,7 +282,7 @@ export function FloatingTimerWidget() {
         open={pickerOpen}
         onOpenChange={setPickerOpen}
         value={target}
-        onPick={(tg) => setTarget(tg)}
+        onPick={onPick}
       />
     </>
   );

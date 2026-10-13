@@ -16,12 +16,14 @@ import {
   type Plan,
   type ProjectRef,
 } from '@/lib/import/plan';
-import type { ProjectRole, VisibleClient } from '@/types/db';
+import type { OrgProjectMember } from '@/types/db';
+import { useCurrentOrg } from '@/lib/currentOrg';
+import { fetchOrgProjectMembers } from './useOrgs';
 import { timeEntriesKey } from './useTimeEntries';
 import { trackerCatalogKey } from './useTrackerCatalog';
 import { trackerPeopleKey } from './useTrackerPeople';
 import { projectsKey } from './useProjects';
-import { clientsKey, visibleClientsKey } from './useClients';
+import { clientsKey } from './useClients';
 import { tasksDataKey } from './useTasksData';
 
 /** The import columns / RPC from sql/time_entry_import.sql are not on the database yet. */
@@ -29,21 +31,13 @@ export class ImportSetupMissingError extends Error {}
 
 const directoryKey = ['tracker', 'import', 'directory'] as const;
 
-interface MemberRow {
-  user_id: string;
-  role?: ProjectRole;
-  email?: string | null;
-  first_name?: string | null;
-  last_name?: string | null;
-  display_name?: string | null;
-}
-
-// Everything the mapping step needs to know about the workspace: projects
-// with my role and their members, people I can see (project members and
-// teammates), clients, work items, and my teams.
+// Everything the mapping step needs to know about the current organization:
+// its projects with my role and who has access, its people (members and
+// guests), clients and work items.
 export function useImportDirectory(enabled: boolean) {
+  const { org } = useCurrentOrg();
   return useQuery({
-    queryKey: directoryKey,
+    queryKey: [...directoryKey, org.id],
     enabled,
     staleTime: 30_000,
     queryFn: async (): Promise<Directory> => {
@@ -51,35 +45,35 @@ export function useImportDirectory(enabled: boolean) {
       const me = u.user?.id;
       if (!me) throw new Error('Not authenticated');
 
-      const [pRes, cRes, vcRes, wRes, tRes] = await Promise.all([
-        supabase.from('projects').select('id,name,client_id').is('deleted_at', null).order('name'),
-        supabase.from('clients').select('id,name,team_id').is('deleted_at', null).order('name'),
-        supabase.rpc('my_visible_clients'),
-        supabase.from('work_items').select('id,project_id,parent_id,name,position').is('deleted_at', null),
-        supabase.rpc('my_teams_list'),
-      ]);
-      for (const r of [pRes, cRes, vcRes, wRes, tRes]) if (r.error) throw r.error;
-
+      const pRes = await supabase
+        .from('projects')
+        .select('id,name,client_id')
+        .eq('org_id', org.id)
+        .is('deleted_at', null)
+        .order('name');
+      if (pRes.error) throw pRes.error;
       const projectsRaw = (pRes.data ?? []) as { id: string; name: string; client_id: string | null }[];
-      const clientsRaw = (cRes.data ?? []) as { id: string; name: string; team_id: string | null }[];
-      const visible = new Map(((vcRes.data ?? []) as VisibleClient[]).map((c) => [c.id, c]));
-      const teams = ((tRes.data ?? []) as { id: string; name: string }[]).map((t) => ({ id: t.id, name: t.name }));
+      const projectIds = projectsRaw.map((p) => p.id);
 
-      const [memberLists, teamLists] = await Promise.all([
-        Promise.all(
-          projectsRaw.map((p) =>
-            supabase.rpc('project_members_list', { p_project: p.id }).then((r) => (r.data ?? []) as MemberRow[]),
-          ),
-        ),
-        Promise.all(
-          teams.map((t) =>
-            supabase.rpc('team_members_list', { p_team: t.id }).then((r) => (r.data ?? []) as MemberRow[]),
-          ),
-        ),
+      const [cRes, wRes, access, orgPeople] = await Promise.all([
+        supabase.from('clients').select('id,name').eq('org_id', org.id).is('deleted_at', null).order('name'),
+        projectIds.length
+          ? supabase
+              .from('work_items')
+              .select('id,project_id,parent_id,name,position')
+              .in('project_id', projectIds)
+              .is('deleted_at', null)
+          : { data: [], error: null },
+        fetchOrgProjectMembers(org.id),
+        // Members only; a guest importing gets nobody beyond their projects.
+        supabase.rpc('org_members_list', { p_org: org.id }),
       ]);
+      for (const r of [cRes, wRes, orgPeople]) if (r.error) throw r.error;
+
+      const clientsRaw = (cRes.data ?? []) as { id: string; name: string }[];
 
       const people = new Map<string, DirPerson>();
-      const addPerson = (m: MemberRow) => {
+      const addPerson = (m: { user_id: string; email?: string | null } & Parameters<typeof displayName>[0]) => {
         if (people.has(m.user_id)) return;
         people.set(m.user_id, {
           userId: m.user_id,
@@ -87,16 +81,25 @@ export function useImportDirectory(enabled: boolean) {
           email: m.email?.toLowerCase() ?? null,
         });
       };
-      const teammateIds = new Set<string>();
-      for (const list of teamLists) for (const m of list) {
-        teammateIds.add(m.user_id);
+      const orgMemberIds = new Set<string>();
+      const orgPeopleIds = new Set<string>();
+      for (const m of (orgPeople.data ?? []) as { user_id: string; role: string; email?: string | null }[]) {
+        orgPeopleIds.add(m.user_id);
+        if (m.role !== 'guest') orgMemberIds.add(m.user_id);
         addPerson(m);
       }
 
+      const accessByProject = new Map<string, OrgProjectMember[]>();
+      for (const m of access) {
+        addPerson(m);
+        const arr = accessByProject.get(m.project_id);
+        if (arr) arr.push(m);
+        else accessByProject.set(m.project_id, [m]);
+      }
+
       const clientName = new Map(clientsRaw.map((c) => [c.id, c.name]));
-      const projects: DirProject[] = projectsRaw.map((p, i) => {
-        const members = memberLists[i];
-        for (const m of members) addPerson(m);
+      const projects: DirProject[] = projectsRaw.map((p) => {
+        const members = accessByProject.get(p.id) ?? [];
         return {
           id: p.id,
           name: p.name,
@@ -107,18 +110,11 @@ export function useImportDirectory(enabled: boolean) {
         };
       });
 
-      const clients: DirClient[] = clientsRaw.map((c) => {
-        const v = visible.get(c.id);
-        return {
-          id: c.id,
-          name: c.name,
-          scope: v?.scope ?? (c.team_id ? 'team' : 'private'),
-          teamName: v?.team_name ?? null,
-        };
-      });
+      const clients: DirClient[] = clientsRaw.map((c) => ({ id: c.id, name: c.name }));
 
       return {
         me,
+        orgId: org.id,
         projects,
         people: [...people.values()].sort((a, b) => a.name.localeCompare(b.name)),
         clients,
@@ -135,8 +131,8 @@ export function useImportDirectory(enabled: boolean) {
           name: w.name,
           position: w.position,
         })),
-        teammateIds,
-        teams,
+        orgMemberIds,
+        orgPeopleIds,
       };
     },
   });
@@ -243,7 +239,7 @@ export function useRunTimeImport() {
       const clientIds = new Map<string, string>();
       onProgress({ step: 'clients', done: 0, total: plan.newClients.length });
       for (const [i, c] of plan.newClients.entries()) {
-        const { data, error } = await supabase.rpc('create_client', { p_name: c.name, p_team_id: c.teamId });
+        const { data, error } = await supabase.rpc('create_client', { p_name: c.name, p_org_id: dir.orgId });
         if (error) throw new Error(`Client "${c.name}": ${error.message}`);
         clientIds.set(c.key, (data as { id: string }).id);
         result.createdClients++;
@@ -257,6 +253,7 @@ export function useRunTimeImport() {
         const { data, error } = await supabase.rpc('create_project', {
           p_name: p.name,
           p_description: 'Imported from Clockify',
+          p_org_id: dir.orgId,
         });
         if (error) throw new Error(`Project "${p.name}": ${error.message}`);
         const id = (data as { id: string }).id;
@@ -383,7 +380,6 @@ export function useRunTimeImport() {
       trackerPeopleKey,
       projectsKey,
       clientsKey,
-      visibleClientsKey,
       tasksDataKey,
       ['work_items'],
       ['tracker', 'import'],

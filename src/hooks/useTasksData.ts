@@ -1,7 +1,9 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import { buildCalendar, type WorkCalendar } from '@/components/gantt/ganttUtils';
 import { displayName } from '@/lib/userDisplay';
+import { useCurrentOrg } from '@/lib/currentOrg';
+import { fetchOrgProjectMembers } from './useOrgs';
 import type { Dependency, ProjectRole, WorkItem } from '@/types/db';
 
 export interface TasksPerson {
@@ -19,16 +21,22 @@ export interface TasksProjectInfo {
 }
 
 export interface TasksData {
-  /** Every work item in every project I belong to. */
+  /** Every work item in the current organization's projects I can see. */
   items: WorkItem[];
   /** Dependency edges across those projects — needed for a round-trippable export. */
   dependencies: Dependency[];
-  /** Projects I can see, name-ascending. */
+  /** Projects I can see in the current organization, name-ascending. */
   projects: TasksProjectInfo[];
-  /** Everyone who is a member of at least one of those projects. */
+  /** Everyone with access to at least one of those projects — for names. */
   people: TasksPerson[];
-  /** project_id -> member user_ids, so the assignee filter can narrow by project. */
+  /** project_id -> people who can work on it (editors and owners): the assignee choices. */
   membership: Record<string, string[]>;
+  /**
+   * project_id -> people with an own role on it: the ones added to it, whom the
+   * Projects list shows. Every org member can edit every project, so the
+   * editors alone would list the whole organization on each row.
+   */
+  projectTeam: Record<string, string[]>;
   /** Projects where I'm owner or editor — everywhere else the UI is read-only. */
   editableProjectIds: Set<string>;
   /** My user id, for "assigned to me" ordering and quick-add. */
@@ -37,33 +45,32 @@ export interface TasksData {
   calendarByProject: Map<string, WorkCalendar>;
 }
 
+// Prefix for invalidation; the data itself is per organization (tasksDataOrgKey).
 export const tasksDataKey = ['tasks', 'global'] as const;
+export const tasksDataOrgKey = (orgId: string) => ['tasks', 'global', orgId] as const;
 
 const EDITOR_ROLES: ReadonlySet<ProjectRole> = new Set<ProjectRole>(['owner', 'editor']);
 
-interface MemberRow {
-  project_id: string;
-  user_id: string;
-  role: ProjectRole;
-  email?: string | null;
-  first_name?: string | null;
-  last_name?: string | null;
-  display_name?: string | null;
+// The cached dataset that holds this project, whichever organization's it is.
+export function findTasksData(qc: QueryClient, projectId: string): TasksData | undefined {
+  for (const [, data] of qc.getQueriesData<TasksData>({ queryKey: tasksDataKey })) {
+    if (data?.projects.some((p) => p.id === projectId)) return data;
+  }
+  return undefined;
 }
 
-// Assembles the global task dataset. Mirrors useWorkloadData: a handful of
-// RLS-gated reads run in parallel with NO project_id filter — the `wi_select`
-// policy (`is_member(project_id) and deleted_at is null`) already restricts rows
-// to projects the current user belongs to, so scoping is enforced server-side.
+// Assembles the task dataset of the current organization: its projects, then
+// their items, edges and non-working days, all RLS-gated. People come from
+// org_project_members — SECURITY DEFINER and joined to auth.users, so it is the
+// only way to get real names and emails (user_settings only covers people who
+// have set a name; the rest would render as truncated uuids).
 //
-// The people axis is built from project members rather than team membership
-// (which is what useWorkloadData uses): a task can be assigned to any member of
-// its project, and the enforce_assignee_membership trigger guarantees exactly
-// that, so project membership is the correct superset. Going via teams would
-// silently drop assignees who don't share a team with you.
+// The people axis is project access, not org membership: a task can be
+// assigned to anyone on its project, guests included.
 export function useTasksData() {
+  const { org } = useCurrentOrg();
   return useQuery({
-    queryKey: tasksDataKey,
+    queryKey: tasksDataOrgKey(org.id),
     queryFn: async (): Promise<TasksData> => {
       const { data: userRes } = await supabase.auth.getUser();
       const currentUserId = userRes.user?.id ?? null;
@@ -71,26 +78,23 @@ export function useTasksData() {
       const pRes = await supabase
         .from('projects')
         .select('id,name,working_days')
+        .eq('org_id', org.id)
         .is('deleted_at', null)
         .order('name', { ascending: true });
       if (pRes.error) throw pRes.error;
       const projects = (pRes.data ?? []) as TasksProjectInfo[];
+      const projectIds = projects.map((p) => p.id);
 
-      const [wRes, dRes, nRes, memberLists] = await Promise.all([
-        supabase.from('work_items').select('*').is('deleted_at', null),
-        supabase.from('dependencies').select('*'),
-        supabase.from('non_working_days').select('project_id,start_date,end_date'),
-        // project_members_list is SECURITY DEFINER and joins auth.users, so it is
-        // the only way to get real names and emails: the client cannot read
-        // auth.users, and user_settings only covers people who have set a name
-        // (8 of 14 members today — the rest would render as truncated uuids).
-        Promise.all(
-          projects.map((p) =>
-            supabase
-              .rpc('project_members_list', { p_project: p.id })
-              .then((r) => ({ projectId: p.id, rows: (r.data ?? []) as MemberRow[] })),
-          ),
-        ),
+      const empty = { data: [], error: null };
+      const [wRes, dRes, nRes, access] = await Promise.all([
+        projectIds.length
+          ? supabase.from('work_items').select('*').in('project_id', projectIds).is('deleted_at', null)
+          : empty,
+        projectIds.length ? supabase.from('dependencies').select('*').in('project_id', projectIds) : empty,
+        projectIds.length
+          ? supabase.from('non_working_days').select('project_id,start_date,end_date').in('project_id', projectIds)
+          : empty,
+        fetchOrgProjectMembers(org.id),
       ]);
       if (wRes.error) throw wRes.error;
       if (dRes.error) throw dRes.error;
@@ -105,52 +109,24 @@ export function useTasksData() {
       }[];
 
       const membership: Record<string, string[]> = {};
+      const projectTeam: Record<string, string[]> = {};
       const editableProjectIds = new Set<string>();
       const peopleById = new Map<string, TasksPerson>();
 
-      for (const { projectId, rows } of memberLists) {
-        membership[projectId] = rows.map((m) => m.user_id);
-        for (const m of rows) {
-          if (m.user_id === currentUserId && EDITOR_ROLES.has(m.role)) {
-            editableProjectIds.add(projectId);
-          }
-          if (peopleById.has(m.user_id)) continue;
-          peopleById.set(m.user_id, {
-            user_id: m.user_id,
-            display_name: displayName(m),
-            email: m.email ?? null,
-            first_name: m.first_name ?? null,
-            last_name: m.last_name ?? null,
-          });
-        }
-      }
-
-      // Fallback for any project whose RPC came back empty (it is gated by
-      // is_member, so an empty list is possible). Names degrade to a short id,
-      // which is still better than dropping the person from the filter.
-      const missing = projects.filter((p) => (membership[p.id] ?? []).length === 0);
-      if (missing.length > 0) {
-        const raw = await supabase
-          .from('project_members')
-          .select('project_id,user_id,role')
-          .in(
-            'project_id',
-            missing.map((p) => p.id),
-          );
-        for (const m of (raw.data ?? []) as MemberRow[]) {
+      for (const m of access) {
+        if (m.direct_role) (projectTeam[m.project_id] ??= []).push(m.user_id);
+        if (EDITOR_ROLES.has(m.role)) {
           (membership[m.project_id] ??= []).push(m.user_id);
-          if (m.user_id === currentUserId && EDITOR_ROLES.has(m.role)) {
-            editableProjectIds.add(m.project_id);
-          }
-          if (peopleById.has(m.user_id)) continue;
-          peopleById.set(m.user_id, {
-            user_id: m.user_id,
-            display_name: displayName({ user_id: m.user_id }),
-            email: null,
-            first_name: null,
-            last_name: null,
-          });
+          if (m.user_id === currentUserId) editableProjectIds.add(m.project_id);
         }
+        if (peopleById.has(m.user_id)) continue;
+        peopleById.set(m.user_id, {
+          user_id: m.user_id,
+          display_name: displayName(m),
+          email: m.email ?? null,
+          first_name: m.first_name ?? null,
+          last_name: m.last_name ?? null,
+        });
       }
 
       const nonWorkingByProject = new Map<string, { start_date: string; end_date: string }[]>();
@@ -173,6 +149,7 @@ export function useTasksData() {
           a.display_name.localeCompare(b.display_name),
         ),
         membership,
+        projectTeam,
         editableProjectIds,
         currentUserId,
         calendarByProject,

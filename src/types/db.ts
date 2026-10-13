@@ -1,10 +1,55 @@
 export type WorkItemLevel = number;
 export type DependencyType = 'FS' | 'FF' | 'SS' | 'SF';
 export type ProjectRole = 'owner' | 'editor' | 'viewer';
-export type TeamRole = 'owner' | 'member';
+/** guest < member < admin < owner. Guests only see projects shared with them. */
+export type OrgRole = 'owner' | 'admin' | 'member' | 'guest';
+
+/** An organization I belong to (my_orgs_list). */
+export interface Organization {
+  id: string;
+  name: string;
+  description: string | null;
+  is_personal: boolean;
+  my_role: OrgRole;
+  /** Only for owners/admins of a shared (non-personal) org. */
+  invite_code: string | null;
+  /** Owners, admins and members. */
+  member_count: number;
+  guest_count: number;
+  /** Projects in the org that I can see. */
+  project_count: number;
+  created_at: string;
+}
+
+/** A person in an org (org_members_list). */
+export interface OrgMember {
+  user_id: string;
+  role: OrgRole;
+  joined_at: string;
+  email?: string;
+  display_name?: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  /** Their own project roles in this org — for a guest, exactly what they can see. */
+  projects: { id: string; name: string; role: ProjectRole }[];
+}
+
+/** Effective access of one person to one project in an org (org_project_members). */
+export interface OrgProjectMember {
+  project_id: string;
+  user_id: string;
+  role: ProjectRole;
+  direct_role: ProjectRole | null;
+  org_role: OrgRole | null;
+  email: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  display_name: string | null;
+}
 
 export interface Project {
   id: string;
+  org_id: string;
   name: string;
   description: string | null;
   working_days: number[];
@@ -26,36 +71,20 @@ export interface ProjectUserPref {
   hidden_at: string | null;
 }
 
-export type ClientScope = 'private' | 'team';
-
 export interface Client {
   id: string;
+  org_id: string;
   name: string;
-  owner_user_id: string | null;
-  team_id: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
 }
 
-export interface VisibleClient {
-  id: string;
-  name: string;
-  scope: ClientScope;
-  team_id: string | null;
-  team_name: string | null;
-}
-
 export interface ProjectClientInfo {
   project_id: string;
   client_id: string;
   client_name: string;
-  scope: ClientScope;
-  team_id: string | null;
-  team_name: string | null;
-  owner_user_id: string | null;
-  owner_display_name: string | null;
 }
 
 export interface ProjectMember {
@@ -68,32 +97,21 @@ export interface ProjectMember {
   first_name?: string | null;
   last_name?: string | null;
   // From project_members_list: `role` is the effective role. direct_role is the
-  // person's own project_members row (null when access is only via a team);
-  // team_role is the best role among linked teams they are in.
+  // person's own project_members row (null when access comes only from the org);
+  // org_role is their role in the project's organization.
   direct_role?: ProjectRole | null;
-  team_role?: ProjectRole | null;
-  team_ids?: string[];
+  org_role?: OrgRole | null;
 }
 
 // A deleted project the caller owns (deleted_projects_list).
 export interface DeletedProject {
   id: string;
+  org_id: string;
   name: string;
   description: string | null;
   deleted_at: string;
   deleted_by: string | null;
   deleted_by_name: string | null;
-}
-
-// A team linked to a project (project_teams_list).
-export interface ProjectTeam {
-  team_id: string;
-  name: string;
-  role: ProjectRole;
-  member_count: number;
-  added_by: string | null;
-  added_at: string;
-  i_am_member: boolean;
 }
 
 export interface ProjectInvite {
@@ -106,32 +124,6 @@ export interface ProjectInvite {
   expires_at: string;
   accepted_at: string | null;
   created_at: string;
-}
-
-export interface Team {
-  id: string;
-  name: string;
-  description: string | null;
-  invite_code: string;
-  created_by: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface TeamSummary extends Team {
-  my_role: TeamRole;
-  member_count: number;
-}
-
-export interface TeamMember {
-  team_id: string;
-  user_id: string;
-  role: TeamRole;
-  joined_at: string;
-  email?: string;
-  display_name?: string;
-  first_name?: string | null;
-  last_name?: string | null;
 }
 
 export interface WorkItem {
@@ -245,6 +237,8 @@ export interface UserSettings {
   first_name: string | null;
   last_name: string | null;
   notifications_enabled: boolean;
+  /** The organization picked in the top bar. */
+  current_org_id: string | null;
   updated_at: string;
 }
 

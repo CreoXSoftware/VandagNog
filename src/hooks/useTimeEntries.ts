@@ -153,6 +153,39 @@ export function useStopTimer() {
   });
 }
 
+export type ActiveTimerPatch = Partial<
+  Pick<TimeEntry, 'project_id' | 'work_item_id' | 'custom_task_text' | 'notes'>
+>;
+
+// Edit the running entry in place: re-target it (the whole session moves, as in
+// Clockify) or change its note. Optimistic so the label/note doesn't flicker.
+// The update policy re-checks membership and that the task is in the project.
+export function useUpdateActiveTimer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (patch: ActiveTimerPatch): Promise<void> => {
+      const active = qc.getQueryData<TimeEntry | null>(activeTimerKey);
+      if (!active || active.id === '__optimistic__') throw new Error('No running timer');
+      const { error } = await supabase
+        .from('time_entries')
+        .update(patch)
+        .eq('id', active.id)
+        .is('end_at', null);
+      if (error) throw error;
+    },
+    onMutate: async (patch) => {
+      await qc.cancelQueries({ queryKey: activeTimerKey });
+      const prev = qc.getQueryData<TimeEntry | null>(activeTimerKey);
+      if (prev) qc.setQueryData(activeTimerKey, { ...prev, ...patch });
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx && 'prev' in ctx) qc.setQueryData(activeTimerKey, ctx.prev ?? null);
+    },
+    onSettled: () => invalidateAll(qc),
+  });
+}
+
 export interface ManualEntryInput {
   project_id: string;
   work_item_id?: string | null;

@@ -465,16 +465,27 @@ export function WorkloadView({ rows, calendar, projectNameById }: Props) {
           {/* Person groups. */}
           {groups.map((g) => (
             <div key={g.person.user_id} className="border-t-2 border-neutral-300 dark:border-neutral-700">
-              {/* Person band */}
+              {/* Person band. It holds no bars, so its details run on into the
+                  timeline instead of squeezing into the people column; sticky,
+                  and capped at the visible width, so they stay in view while
+                  scrolling sideways. */}
               <div className="flex bg-neutral-100 dark:bg-neutral-900" style={{ height: PERSON_HEADER_H }}>
                 <div
-                  className="sticky left-0 z-10 shrink-0 flex items-center gap-2 px-3 bg-neutral-100 dark:bg-neutral-900 border-r border-neutral-200 dark:border-neutral-800"
-                  style={{ width: PEOPLE_W }}
+                  className="sticky left-0 z-10 flex items-center gap-2 px-3 bg-neutral-100 dark:bg-neutral-900 whitespace-nowrap"
+                  style={{ minWidth: PEOPLE_W, maxWidth: viewportWidth > 0 ? viewportWidth : undefined }}
                 >
                   <Avatar user={g.person} size="xs" />
-                  <span className="text-xs font-semibold truncate text-neutral-800 dark:text-neutral-100">
+                  <span className="min-w-0 text-xs font-semibold truncate text-neutral-800 dark:text-neutral-100">
                     {g.person.display_name}
                   </span>
+                  {g.person.is_guest && (
+                    <span
+                      title={t('workload.guestHint')}
+                      className="shrink-0 rounded-full bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300 px-1.5 h-4 inline-flex items-center text-[10px] font-medium"
+                    >
+                      {t('workload.guest')}
+                    </span>
+                  )}
                   {g.overdueCount > 0 && (
                     <button
                       onClick={() => jumpToOldestOverdue(g.person.user_id)}
@@ -485,7 +496,7 @@ export function WorkloadView({ rows, calendar, projectNameById }: Props) {
                       {t('workload.overdueChip', { n: g.overdueCount })}
                     </button>
                   )}
-                  <span className="ml-auto text-[10px] text-neutral-500 dark:text-neutral-400 tabular-nums whitespace-nowrap">
+                  <span className="shrink-0 pl-1 text-[10px] text-neutral-500 dark:text-neutral-400 tabular-nums">
                     {t('workload.taskSummary', { tasks: g.taskCount, days: g.workDays })}
                     {g.lateDays > 0 && (
                       <span className="text-red-600 dark:text-red-400">
@@ -495,7 +506,6 @@ export function WorkloadView({ rows, calendar, projectNameById }: Props) {
                     )}
                   </span>
                 </div>
-                <div style={{ width: axis.total }} />
               </div>
 
               {/* One sub-row per project */}

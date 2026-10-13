@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useRouterState } from '@tanstack/react-router';
-import { FolderKanban, Users, Timer, ChevronLeft, ChevronRight, Building2, Gauge, ListTodo } from 'lucide-react';
+import { FolderKanban, Network, Timer, ChevronLeft, ChevronRight, Building2, Gauge, ListTodo } from 'lucide-react';
 import { useT, type TKey } from '@/lib/i18n';
 
 interface NavItem {
@@ -15,7 +15,7 @@ interface NavItem {
 const items: NavItem[] = [
   { to: '/tasks', labelKey: 'nav.tasks', icon: ListTodo, matchPrefix: '/tasks' },
   { to: '/projects', labelKey: 'nav.projects', icon: FolderKanban, matchPrefix: '/projects' },
-  { to: '/teams', labelKey: 'nav.teams', icon: Users, matchPrefix: '/teams' },
+  { to: '/orgs', labelKey: 'nav.orgs', icon: Network, matchPrefix: '/orgs' },
   { to: '/clients', labelKey: 'nav.clients', icon: Building2, matchPrefix: '/clients' },
   { to: '/workload', labelKey: 'nav.workload', icon: Gauge, matchPrefix: '/workload' },
   { to: '/tracker', labelKey: 'nav.tracker', icon: Timer, matchPrefix: '/tracker' },

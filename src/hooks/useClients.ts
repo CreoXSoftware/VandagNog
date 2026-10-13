@@ -1,22 +1,27 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
-import type { Client, ProjectClientInfo, VisibleClient } from '@/types/db';
+import type { Client, ProjectClientInfo } from '@/types/db';
 import { projectKey, projectsKey } from './useProjects';
 
+// Prefix of every client list; the lists themselves are per organization.
 export const clientsKey = ['clients'] as const;
-export const visibleClientsKey = ['clients', 'visible'] as const;
+export const orgClientsKey = (orgId: string) => ['clients', 'org', orgId] as const;
 export const projectClientKey = (projectId: string) => ['project_client', projectId] as const;
 // Under the 'project_client' prefix, so client renames refresh it too.
 export const allProjectClientsKey = ['project_client', 'all'] as const;
 
-// All clients in scopes I own/manage: my private + every team I'm in.
-export function useMyClients() {
+// The clients of an organization (members see them all; a guest only those of
+// projects shared with them).
+export function useOrgClients(orgId: string | undefined) {
   return useQuery({
-    queryKey: clientsKey,
+    queryKey: orgId ? orgClientsKey(orgId) : ['clients', 'none'],
+    enabled: !!orgId,
     queryFn: async (): Promise<Client[]> => {
+      if (!orgId) return [];
       const { data, error } = await supabase
         .from('clients')
         .select('*')
+        .eq('org_id', orgId)
         .is('deleted_at', null)
         .order('name', { ascending: true });
       if (error) throw error;
@@ -25,19 +30,7 @@ export function useMyClients() {
   });
 }
 
-// Picker payload — same dataset annotated with scope/team_name from server.
-export function useVisibleClients() {
-  return useQuery({
-    queryKey: visibleClientsKey,
-    queryFn: async (): Promise<VisibleClient[]> => {
-      const { data, error } = await supabase.rpc('my_visible_clients');
-      if (error) throw error;
-      return (data ?? []) as VisibleClient[];
-    },
-  });
-}
-
-// Client linked to a project, with scope label info. Null if no client.
+// Client linked to a project. Null if no client.
 export function useProjectClient(projectId: string | undefined) {
   return useQuery({
     queryKey: projectId ? projectClientKey(projectId) : ['project_client', 'none'],
@@ -56,7 +49,6 @@ export function useProjectClient(projectId: string | undefined) {
 }
 
 // Every visible project's client in one read, for the Projects list.
-// project_client_view is already scoped by is_member.
 export function useAllProjectClients() {
   return useQuery({
     queryKey: allProjectClientsKey,
@@ -71,18 +63,15 @@ export function useAllProjectClients() {
 export function useCreateClient() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { name: string; team_id?: string | null }) => {
+    mutationFn: async (input: { name: string; org_id: string }) => {
       const { data, error } = await supabase.rpc('create_client', {
         p_name: input.name,
-        p_team_id: input.team_id ?? null,
+        p_org_id: input.org_id,
       });
       if (error) throw error;
       return data as Client;
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: clientsKey });
-      qc.invalidateQueries({ queryKey: visibleClientsKey });
-    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: clientsKey }),
   });
 }
 
@@ -98,7 +87,6 @@ export function useUpdateClient() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: clientsKey });
-      qc.invalidateQueries({ queryKey: visibleClientsKey });
       qc.invalidateQueries({ queryKey: ['project_client'] });
     },
   });
@@ -111,29 +99,7 @@ export function useDeleteClient() {
       const { error } = await supabase.from('clients').delete().eq('id', id);
       if (error) throw error;
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: clientsKey });
-      qc.invalidateQueries({ queryKey: visibleClientsKey });
-    },
-  });
-}
-
-export function usePromoteClient() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async (input: { client_id: string; team_id: string }) => {
-      const { data, error } = await supabase.rpc('promote_client_to_team', {
-        p_client_id: input.client_id,
-        p_team_id: input.team_id,
-      });
-      if (error) throw error;
-      return data as Client;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: clientsKey });
-      qc.invalidateQueries({ queryKey: visibleClientsKey });
-      qc.invalidateQueries({ queryKey: ['project_client'] });
-    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: clientsKey }),
   });
 }
 

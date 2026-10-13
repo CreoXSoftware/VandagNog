@@ -1,11 +1,17 @@
 import { useState } from 'react';
-import { Play, Square, StickyNote } from 'lucide-react';
+import { Play, Square } from 'lucide-react';
 import { toast } from 'sonner';
-import { Textarea } from '@/components/ui/Input';
+import { Input } from '@/components/ui/Input';
 import { useT } from '@/lib/i18n';
-import { useActiveTimer, useStartTimer, useStopTimer, pushRecent } from '@/hooks/useTimeEntries';
+import {
+  useActiveTimer,
+  useStartTimer,
+  useStopTimer,
+  useUpdateActiveTimer,
+  pushRecent,
+} from '@/hooks/useTimeEntries';
 import { useTrackerCatalog } from '@/hooks/useTrackerCatalog';
-import { TaskTargetPicker, TaskTargetTrigger, labelForTarget } from './TaskTargetPicker';
+import { TaskTargetPicker, TaskTargetTrigger } from './TaskTargetPicker';
 import { formatHMS } from '@/lib/timeFormat';
 import { useServerNow } from '@/lib/serverClock';
 import type { TrackerTarget } from '@/types/db';
@@ -13,21 +19,36 @@ import type { TrackerTarget } from '@/types/db';
 interface Props {
   target: TrackerTarget | null;
   setTarget: (t: TrackerTarget | null) => void;
+  /** Rendered as the card's first row (the Live / Manual switch). */
+  header?: React.ReactNode;
 }
 
-export function LiveTimerCard({ target, setTarget }: Props) {
+// One row: note · client/project/task · elapsed · start/stop. While a timer runs,
+// both the note and the target stay editable and are written to the running entry.
+export function LiveTimerCard({ target, setTarget, header }: Props) {
   const t = useT();
   const { data: catalog } = useTrackerCatalog();
   const { data: active } = useActiveTimer();
   const start = useStartTimer();
   const stop = useStopTimer();
+  const updateActive = useUpdateActiveTimer();
   const [pickerOpen, setPickerOpen] = useState(false);
   const [notes, setNotes] = useState('');
-  const [showNotes, setShowNotes] = useState(false);
   const now = useServerNow(!!active);
 
   const running = !!active;
+  // The optimistic row from a just-pressed Start can't be edited until the real one lands.
+  const editable = !!active && active.id !== '__optimistic__';
   const liveElapsed = active ? Math.max(0, now - new Date(active.start_at).getTime()) : 0;
+
+  // Show the running entry's note; clear the box when the timer stops. Adjusted
+  // during render when the entry changes, so typing isn't overwritten by refetches.
+  const activeId = active?.id ?? null;
+  const [notesFor, setNotesFor] = useState<string | null>(null);
+  if (activeId !== notesFor) {
+    setNotesFor(activeId);
+    setNotes(active?.notes ?? '');
+  }
 
   const runningTarget: TrackerTarget | null = active
     ? {
@@ -37,7 +58,6 @@ export function LiveTimerCard({ target, setTarget }: Props) {
       }
     : null;
   const displayTarget = runningTarget ?? target;
-  const displayLabel = displayTarget && catalog ? labelForTarget(displayTarget, catalog) : null;
 
   async function onStart() {
     if (!target) {
@@ -45,15 +65,12 @@ export function LiveTimerCard({ target, setTarget }: Props) {
       return;
     }
     pushRecent(target);
-    const notesVal = notes.trim() || null;
-    setNotes('');
-    setShowNotes(false);
     try {
       await start.mutateAsync({
         project_id: target.project_id,
         work_item_id: target.work_item_id,
         custom_task_text: target.custom_task_text,
-        notes: notesVal,
+        notes: notes.trim() || null,
       });
     } catch (e) {
       toast.error((e as Error).message);
@@ -61,6 +78,7 @@ export function LiveTimerCard({ target, setTarget }: Props) {
   }
 
   async function onStop() {
+    await saveNotes();
     try {
       await stop.mutateAsync();
     } catch (e) {
@@ -68,74 +86,94 @@ export function LiveTimerCard({ target, setTarget }: Props) {
     }
   }
 
+  async function saveNotes() {
+    if (!active || !editable) return;
+    const next = notes.trim() || null;
+    if (next === (active.notes ?? null)) return;
+    try {
+      await updateActive.mutateAsync({ notes: next });
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
+  async function onPick(tg: TrackerTarget) {
+    setTarget(tg);
+    if (!running) return;
+    // Re-target the running session as a whole.
+    pushRecent(tg);
+    try {
+      await updateActive.mutateAsync({
+        project_id: tg.project_id,
+        work_item_id: tg.work_item_id,
+        custom_task_text: tg.custom_task_text,
+      });
+      toast.success(t('tracker.timerRetargeted'));
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  }
+
   return (
     <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-3 space-y-2">
-      <div className="flex items-center gap-2">
-        {running && (
-          <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" aria-hidden />
-        )}
-        <div className="flex-1 min-w-0">
-          {running && displayLabel ? (
-            <div className="px-3 h-9 flex items-center rounded-md border border-transparent text-sm truncate text-neutral-900 dark:text-neutral-100">
-              {displayLabel.join(' › ')}
-            </div>
-          ) : (
-            <TaskTargetTrigger
-              value={target}
-              catalog={catalog}
-              onClick={() => setPickerOpen(true)}
-              onClear={() => setTarget(null)}
-            />
-          )}
-        </div>
-
-        <div className="font-mono text-lg tabular-nums px-2 text-neutral-900 dark:text-neutral-100 shrink-0">
-          {formatHMS(liveElapsed)}
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setShowNotes((v) => !v)}
-          disabled={running}
-          aria-label={t('tracker.addNote')}
-          title={t('tracker.addNote')}
-          className="h-9 w-9 rounded-md flex items-center justify-center text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-        >
-          <StickyNote size={14} />
-        </button>
-
-        <button
-          type="button"
-          onClick={running ? onStop : onStart}
-          disabled={(!running && !target) || start.isPending || stop.isPending}
-          aria-label={running ? t('tracker.stop') : t('tracker.start')}
-          title={running ? t('tracker.stop') : t('tracker.start')}
-          className={[
-            'h-9 w-9 rounded-md flex items-center justify-center transition-colors shrink-0',
-            running
-              ? 'bg-red-600 hover:bg-red-500 text-white'
-              : 'bg-neutral-900 dark:bg-neutral-100 text-neutral-50 dark:text-neutral-900 hover:opacity-90',
-            'disabled:opacity-50 disabled:cursor-not-allowed',
-          ].join(' ')}
-        >
-          {running ? <Square size={14} /> : <Play size={14} />}
-        </button>
-      </div>
-
-      {showNotes && !running && (
-        <Textarea
-          placeholder={t('tracker.notesPlaceholder')}
+      {header}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+        <Input
+          placeholder={t('tracker.notePlaceholder')}
+          aria-label={t('tracker.notesLabel')}
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
-          className="min-h-[60px]"
+          onBlur={saveNotes}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            if (running) e.currentTarget.blur();
+            else if (target) void onStart();
+          }}
+          className="sm:flex-1 min-w-0"
         />
-      )}
+
+        <div className="sm:w-[42%] min-w-0">
+          <TaskTargetTrigger
+            value={displayTarget}
+            catalog={catalog}
+            onClick={() => (running && !editable ? undefined : setPickerOpen(true))}
+            onClear={running ? undefined : () => setTarget(null)}
+            title={running ? t('tracker.changeRunningTarget') : undefined}
+          />
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+          {running && (
+            <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse shrink-0" aria-hidden />
+          )}
+          <div className="font-mono text-lg tabular-nums px-1 text-neutral-900 dark:text-neutral-100">
+            {formatHMS(liveElapsed)}
+          </div>
+          <button
+            type="button"
+            onClick={running ? onStop : onStart}
+            disabled={(!running && !target) || start.isPending || stop.isPending}
+            aria-label={running ? t('tracker.stop') : t('tracker.start')}
+            title={running ? t('tracker.stop') : t('tracker.start')}
+            className={[
+              'h-9 w-9 rounded-md flex items-center justify-center transition-colors shrink-0',
+              running
+                ? 'bg-red-600 hover:bg-red-500 text-white'
+                : 'bg-neutral-900 dark:bg-neutral-100 text-neutral-50 dark:text-neutral-900 hover:opacity-90',
+              'disabled:opacity-50 disabled:cursor-not-allowed',
+            ].join(' ')}
+          >
+            {running ? <Square size={14} /> : <Play size={14} />}
+          </button>
+        </div>
+      </div>
 
       <TaskTargetPicker
         open={pickerOpen}
         onOpenChange={setPickerOpen}
-        value={target}
-        onPick={(t) => setTarget(t)}
+        value={displayTarget}
+        onPick={onPick}
       />
     </div>
   );

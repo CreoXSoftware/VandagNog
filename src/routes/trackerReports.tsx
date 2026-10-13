@@ -7,12 +7,12 @@ import { Select } from '@/components/ui/Select';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { useReportEntries } from '@/hooks/useTimeEntries';
-import { useTrackerCatalog, workItemPath } from '@/hooks/useTrackerCatalog';
+import { useOrgTrackerCatalog, workItemPath, type TrackerCatalog } from '@/hooks/useTrackerCatalog';
 import { useTrackerPeople } from '@/hooks/useTrackerPeople';
-import { useMyTeams, useTeamMembers } from '@/hooks/useTeams';
 import { durationMs, formatHM, formatHoursDecimal, isoDate } from '@/lib/timeFormat';
 import { exportCSV, exportExcel, exportPDF, type ReportRow, type ReportSummary } from '@/lib/exporters/trackerExports';
 import { exportClockifyCSV } from '@/lib/exporters/timeEntriesCsv';
+import { ReportCharts } from '@/components/tracker/ReportCharts';
 import { toast } from 'sonner';
 import type { TimeEntry } from '@/types/db';
 
@@ -21,7 +21,6 @@ type TaskMode = 'all' | 'noTask' | 'workItem' | 'custom';
 interface Filters {
   since: string; // YYYY-MM-DD inclusive
   until: string; // YYYY-MM-DD exclusive (one day after the last day included)
-  team_id: string;
   user_id: string;
   client_id: string;
   project_id: string;
@@ -37,7 +36,6 @@ function defaultFilters(): Filters {
   return {
     since: isoDate(since),
     until: isoDate(until),
-    team_id: '',
     user_id: '',
     client_id: '',
     project_id: '',
@@ -60,18 +58,12 @@ export function TrackerReportsPage() {
   const untilIso = useMemo(() => new Date(filters.until + 'T00:00:00').toISOString(), [filters.until]);
   const { data: entries = [], isLoading } = useReportEntries({ since: sinceIso, until: untilIso });
 
-  const { data: catalog } = useTrackerCatalog();
+  // The current organization's projects: entries elsewhere are left out.
+  const { data: catalog } = useOrgTrackerCatalog();
   const { data: people = [] } = useTrackerPeople();
-  const { data: teams = [] } = useMyTeams();
-  const { data: teamMembers = [] } = useTeamMembers(filters.team_id || undefined);
-
-  const teamUserIds = useMemo<Set<string> | null>(() => {
-    if (!filters.team_id) return null;
-    return new Set(teamMembers.map((m) => m.user_id));
-  }, [filters.team_id, teamMembers]);
 
   // Filter the server result client-side
-  const filtered = useMemo(() => filterEntries(entries, filters, teamUserIds, catalog), [entries, filters, teamUserIds, catalog]);
+  const filtered = useMemo(() => filterEntries(entries, filters, catalog), [entries, filters, catalog]);
 
   // Materialise into ReportRow[] for export + table
   const rows = useMemo<ReportRow[]>(() => {
@@ -84,9 +76,9 @@ export function TrackerReportsPage() {
   const summary = useMemo<ReportSummary>(() => ({
     totalMs,
     range: { since: filters.since, until: filters.until },
-    filters: filterChips(filters, catalog, people, teams),
+    filters: filterChips(filters, catalog, people),
     rows,
-  }), [totalMs, filters, catalog, people, teams, rows]);
+  }), [totalMs, filters, catalog, people, rows]);
 
   // Raw entries in Clockify's CSV format, re-importable via Tracker → Import.
   function exportEntries() {
@@ -135,18 +127,10 @@ export function TrackerReportsPage() {
             <Field label={t('tracker.to')}>
               <Input type="date" value={filters.until} onChange={(e) => patch({ until: e.target.value })} />
             </Field>
-            <Field label={t('tracker.team')}>
-              <Select value={filters.team_id} onChange={(e) => patch({ team_id: e.target.value, user_id: '' })}>
-                <option value="">{t('tracker.anyTeam')}</option>
-                {teams.map((tm) => <option key={tm.id} value={tm.id}>{tm.name}</option>)}
-              </Select>
-            </Field>
             <Field label={t('tracker.member')}>
               <Select value={filters.user_id} onChange={(e) => patch({ user_id: e.target.value })}>
                 <option value="">{t('tracker.anyMember')}</option>
-                {people
-                  .filter((p) => !teamUserIds || teamUserIds.has(p.user_id))
-                  .map((p) => <option key={p.user_id} value={p.user_id}>{p.display_name}</option>)}
+                {people.map((p) => <option key={p.user_id} value={p.user_id}>{p.display_name}</option>)}
               </Select>
             </Field>
             <Field label={t('tracker.client')}>
@@ -224,7 +208,18 @@ export function TrackerReportsPage() {
             {t('tracker.noResults')}
           </div>
         ) : (
-          <SummaryView rows={rows} totalMs={totalMs} />
+          <SummaryView
+            rows={rows}
+            totalMs={totalMs}
+            charts={
+              <ReportCharts
+                rows={rows}
+                since={filters.since}
+                until={filters.until}
+                projectFiltered={!!filters.project_id}
+              />
+            }
+          />
         )}
       </div>
     </div>
@@ -235,7 +230,7 @@ export function TrackerReportsPage() {
 
 function entryToRow(
   e: TimeEntry,
-  catalog: NonNullable<ReturnType<typeof useTrackerCatalog>['data']>,
+  catalog: TrackerCatalog,
   personById: Map<string, string>,
 ): ReportRow {
   const project = catalog.projects.find((p) => p.id === e.project_id);
@@ -261,14 +256,14 @@ function entryToRow(
 function filterEntries(
   entries: TimeEntry[],
   f: Filters,
-  teamUserIds: Set<string> | null,
-  catalog: ReturnType<typeof useTrackerCatalog>['data'] | undefined,
+  catalog: TrackerCatalog | undefined,
 ): TimeEntry[] {
   if (!catalog) return [];
   const projectClient = new Map(catalog.projects.map((p) => [p.id, p.client_id]));
   const q = f.custom_query.trim().toLowerCase();
   return entries.filter((e) => {
-    if (teamUserIds && !teamUserIds.has(e.user_id)) return false;
+    if (!projectClient.has(e.project_id)) return false; // another organization's
+
     if (f.user_id && e.user_id !== f.user_id) return false;
     if (f.client_id) {
       const cid = projectClient.get(e.project_id);
@@ -290,12 +285,10 @@ function filterEntries(
 
 function filterChips(
   f: Filters,
-  catalog: ReturnType<typeof useTrackerCatalog>['data'] | undefined,
+  catalog: TrackerCatalog | undefined,
   people: ReturnType<typeof useTrackerPeople>['data'] | undefined,
-  teams: ReturnType<typeof useMyTeams>['data'] | undefined,
 ): string[] {
   const out: string[] = [`${f.since} → ${f.until}`];
-  if (f.team_id) out.push(`Team: ${teams?.find((t) => t.id === f.team_id)?.name ?? f.team_id}`);
   if (f.user_id) out.push(`Member: ${people?.find((p) => p.user_id === f.user_id)?.display_name ?? f.user_id}`);
   if (f.client_id) out.push(`Client: ${catalog?.clients.find((c) => c.id === f.client_id)?.name ?? f.client_id}`);
   if (f.project_id) out.push(`Project: ${catalog?.projects.find((p) => p.id === f.project_id)?.name ?? f.project_id}`);
@@ -346,7 +339,15 @@ function PageTabs({ onReports }: { onReports: boolean }) {
   );
 }
 
-function SummaryView({ rows, totalMs }: { rows: ReportRow[]; totalMs: number }) {
+function SummaryView({
+  rows,
+  totalMs,
+  charts,
+}: {
+  rows: ReportRow[];
+  totalMs: number;
+  charts: React.ReactNode;
+}) {
   const t = useT();
   const tree = useMemo(() => buildSummary(rows), [rows]);
   return (
@@ -365,6 +366,8 @@ function SummaryView({ rows, totalMs }: { rows: ReportRow[]; totalMs: number }) 
           <div className="font-mono text-2xl tabular-nums">{rows.length}</div>
         </div>
       </div>
+
+      {charts}
 
       <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 overflow-hidden">
         {tree.map((node) => <SummaryNode key={node.key} node={node} depth={0} />)}

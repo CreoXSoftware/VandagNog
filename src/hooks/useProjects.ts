@@ -1,21 +1,27 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
+import { useCurrentOrg } from '@/lib/currentOrg';
 import type { DeletedProject, Project, ProjectUserPref } from '@/types/db';
 
+// Prefix of every project list; the lists themselves are per organization.
 export const projectsKey = ['projects'] as const;
+export const orgProjectsKey = (orgId: string) => ['projects', 'org', orgId] as const;
 export const deletedProjectsKey = ['projects', 'deleted'] as const;
 export const projectKey = (id: string) => ['project', id] as const;
 // Not under projectsKey: every project edit invalidates that prefix, and pins
 // don't change when a project does.
 export const projectPrefsKey = ['project_prefs'] as const;
 
+// Projects of the current organization that I can see.
 export function useProjects() {
+  const { org } = useCurrentOrg();
   return useQuery({
-    queryKey: projectsKey,
+    queryKey: orgProjectsKey(org.id),
     queryFn: async (): Promise<Project[]> => {
       const { data, error } = await supabase
         .from('projects')
         .select('*')
+        .eq('org_id', org.id)
         .is('deleted_at', null)
         .order('created_at', { ascending: false });
       if (error) throw error;
@@ -37,20 +43,41 @@ export function useProject(id: string | undefined) {
   });
 }
 
+// New project in the current organization (members only; guests can't).
 export function useCreateProject() {
   const qc = useQueryClient();
+  const { org } = useCurrentOrg();
   return useMutation({
     mutationFn: async (input: { name: string; description?: string }): Promise<Project> => {
       const { data, error } = await supabase.rpc('create_project', {
         p_name: input.name,
         p_description: input.description ?? null,
+        p_org_id: org.id,
       });
       if (error) throw error;
       return data as Project;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: projectsKey });
+      qc.invalidateQueries({ queryKey: ['orgs'] });
     },
+  });
+}
+
+// Move a project I own into another organization I'm a member of. Its people
+// come along (as guests where they aren't in the new org); a client from the
+// old org is unlinked. Touches every org-scoped list, so refresh everything.
+export function useMoveProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { id: string; org_id: string }) => {
+      const { error } = await supabase.rpc('move_project_to_org', {
+        p_project: input.id,
+        p_org: input.org_id,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries(),
   });
 }
 
@@ -100,8 +127,9 @@ export function useRestoreProject() {
   });
 }
 
-// Deleted projects the current user owns, newest first.
+// Deleted projects of the current organization that I own, newest first.
 export function useDeletedProjects() {
+  const { org } = useCurrentOrg();
   return useQuery({
     queryKey: deletedProjectsKey,
     queryFn: async (): Promise<DeletedProject[]> => {
@@ -109,6 +137,7 @@ export function useDeletedProjects() {
       if (error) throw error;
       return (data ?? []) as DeletedProject[];
     },
+    select: (rows) => rows.filter((p) => p.org_id === org.id),
   });
 }
 

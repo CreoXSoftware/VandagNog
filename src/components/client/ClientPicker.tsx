@@ -1,32 +1,34 @@
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { Plus, Users, User, Check, X } from 'lucide-react';
+import { Plus, Check, X } from 'lucide-react';
 import { Dialog, DialogContent } from '@/components/ui/Dialog';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
-import { Select } from '@/components/ui/Select';
-import { useCreateClient, useVisibleClients } from '@/hooks/useClients';
-import { useMyTeams } from '@/hooks/useTeams';
+import { useCreateClient, useOrgClients } from '@/hooks/useClients';
+import { useCurrentOrg } from '@/lib/currentOrg';
 import { useT } from '@/lib/i18n';
-import type { VisibleClient } from '@/types/db';
+import type { Client } from '@/types/db';
 
 interface Props {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  /** The project's organization: only its clients can be linked. */
+  orgId: string;
   currentId: string | null;
   onPick: (clientId: string | null) => void | Promise<void>;
 }
 
-export function ClientPickerDialog({ open, onOpenChange, currentId, onPick }: Props) {
+export function ClientPickerDialog({ open, onOpenChange, orgId, currentId, onPick }: Props) {
   const t = useT();
-  const { data: clients = [], isLoading } = useVisibleClients();
-  const { data: teams = [] } = useMyTeams();
+  const { orgs } = useCurrentOrg();
+  const { data: clients = [], isLoading } = useOrgClients(open ? orgId : undefined);
   const create = useCreateClient();
+  // Guests can link a client they can see, but not add one to the org.
+  const canCreate = orgs.find((o) => o.id === orgId)?.my_role !== 'guest';
 
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
-  const [newTeam, setNewTeam] = useState<string>('');  // '' = private
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -34,26 +36,10 @@ export function ClientPickerDialog({ open, onOpenChange, currentId, onPick }: Pr
     return clients.filter((c) => c.name.toLowerCase().includes(q));
   }, [clients, search]);
 
-  // Group by scope
-  const groups = useMemo(() => {
-    const priv: VisibleClient[] = [];
-    const byTeam: Record<string, { name: string; items: VisibleClient[] }> = {};
-    for (const c of filtered) {
-      if (c.scope === 'private') priv.push(c);
-      else if (c.team_id) {
-        const k = c.team_id;
-        if (!byTeam[k]) byTeam[k] = { name: c.team_name ?? '', items: [] };
-        byTeam[k].items.push(c);
-      }
-    }
-    return { priv, teams: Object.entries(byTeam) };
-  }, [filtered]);
-
   function reset() {
     setSearch('');
     setCreating(false);
     setNewName('');
-    setNewTeam('');
   }
 
   async function pick(id: string | null) {
@@ -70,7 +56,7 @@ export function ClientPickerDialog({ open, onOpenChange, currentId, onPick }: Pr
     const name = newName.trim();
     if (!name) return;
     try {
-      const c = await create.mutateAsync({ name, team_id: newTeam || null });
+      const c = await create.mutateAsync({ name, org_id: orgId });
       toast.success(t('clients.created_toast'));
       await pick(c.id);
     } catch (err) {
@@ -92,16 +78,6 @@ export function ClientPickerDialog({ open, onOpenChange, currentId, onPick }: Pr
             <div>
               <label className="text-xs font-medium text-neutral-600 dark:text-neutral-300">{t('clients.clientName')}</label>
               <Input value={newName} onChange={(e) => setNewName(e.target.value)} autoFocus />
-            </div>
-            <div>
-              <label className="text-xs font-medium text-neutral-600 dark:text-neutral-300">{t('clients.scope')}</label>
-              <Select value={newTeam} onChange={(e) => setNewTeam(e.target.value)} className="w-full">
-                <option value="">{t('clients.private')}</option>
-                {teams.map((tm) => (
-                  <option key={tm.id} value={tm.id}>{tm.name}</option>
-                ))}
-              </Select>
-              <div className="text-[11px] text-neutral-500 dark:text-neutral-400 mt-1">{t('clients.scopeHint')}</div>
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setCreating(false)}>{t('common.cancel')}</Button>
@@ -132,34 +108,20 @@ export function ClientPickerDialog({ open, onOpenChange, currentId, onPick }: Pr
               {isLoading && (
                 <div className="text-sm text-neutral-500 dark:text-neutral-400 px-2">{t('common.loading')}</div>
               )}
-              {!isLoading && groups.priv.length > 0 && (
-                <Section
-                  icon={<User size={12} />}
-                  label={t('clients.private')}
-                  items={groups.priv}
-                  currentId={currentId}
-                  onPick={pick}
-                />
-              )}
-              {!isLoading && groups.teams.map(([teamId, g]) => (
-                <Section
-                  key={teamId}
-                  icon={<Users size={12} />}
-                  label={g.name}
-                  items={g.items}
-                  currentId={currentId}
-                  onPick={pick}
-                />
-              ))}
+              {!isLoading && <ClientList items={filtered} currentId={currentId} onPick={pick} />}
               {!isLoading && filtered.length === 0 && (
                 <div className="text-sm text-neutral-500 dark:text-neutral-400 px-2">{t('clients.noneYet')}</div>
               )}
             </div>
 
             <div className="flex justify-between pt-2 border-t border-neutral-200 dark:border-neutral-800">
-              <Button variant="outline" onClick={() => setCreating(true)}>
-                <Plus size={14} /> {t('clients.newClient')}
-              </Button>
+              {canCreate ? (
+                <Button variant="outline" onClick={() => setCreating(true)}>
+                  <Plus size={14} /> {t('clients.newClient')}
+                </Button>
+              ) : (
+                <span />
+              )}
               <Button variant="ghost" onClick={() => onOpenChange(false)}>{t('common.close')}</Button>
             </div>
           </div>
@@ -169,25 +131,18 @@ export function ClientPickerDialog({ open, onOpenChange, currentId, onPick }: Pr
   );
 }
 
-function Section({
-  icon,
-  label,
+function ClientList({
   items,
   currentId,
   onPick,
 }: {
-  icon: React.ReactNode;
-  label: string;
-  items: VisibleClient[];
+  items: Client[];
   currentId: string | null;
   onPick: (id: string) => void;
 }) {
   if (items.length === 0) return null;
   return (
     <div>
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-neutral-500 dark:text-neutral-400 px-2 pb-1">
-        {icon}<span>{label}</span>
-      </div>
       <div className="space-y-0.5">
         {items.map((c) => {
           const active = c.id === currentId;

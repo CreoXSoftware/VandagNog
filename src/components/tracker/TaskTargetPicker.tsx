@@ -1,12 +1,27 @@
-import { useMemo, useState } from 'react';
-import { Briefcase, ChevronDown, ChevronRight, Clock, ListChecks, Plus, Search, Sparkles, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Briefcase,
+  Building2,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  EyeOff,
+  ListChecks,
+  Pin,
+  Plus,
+  Search,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import { Dialog, DialogContent } from '@/components/ui/Dialog';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/Tooltip';
 import { useT } from '@/lib/i18n';
 import { readRecents, type RecentTarget } from '@/hooks/useTimeEntries';
+import { useProjectPrefs } from '@/hooks/useProjects';
 import {
-  useTrackerCatalog,
+  useOrgTrackerCatalog,
   workItemPath,
   type TrackerCatalog,
   type TrackerCatalogProject,
@@ -21,23 +36,80 @@ interface Props {
   onPick: (t: TrackerTarget) => void;
 }
 
+// Same ordering as the Projects page: case-insensitive, numeric-aware names.
+const nameCollator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+const byName = (a: TrackerCatalogProject, b: TrackerCatalogProject) =>
+  nameCollator.compare(a.name, b.name);
+
+const NO_CLIENT_KEY = '__none__';
+const OPEN_CLIENTS_KEY = 'vn.tracker.picker.openClients';
+
+interface ClientGroup {
+  key: string;
+  name: string | null;
+  projects: TrackerCatalogProject[];
+}
+
 export function TaskTargetPicker({ open, onOpenChange, value, onPick }: Props) {
   const t = useT();
-  const { data: catalog, isLoading } = useTrackerCatalog();
+  // Only the current organization's projects are offered.
+  const { data: catalog, isLoading } = useOrgTrackerCatalog();
+  const { data: prefs = [] } = useProjectPrefs();
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [openClients, setOpenClients] = useState<Set<string>>(readOpenClients);
+  useEffect(() => saveOpenClients(openClients), [openClients]);
 
-  const recents = useMemo<RecentTarget[]>(() => (open ? readRecents() : []), [open]);
+  // Pins and hidden projects are the same per-user settings as the Projects page.
+  const { pinnedIds, hiddenIds } = useMemo(() => {
+    const pinnedIds = new Set<string>();
+    const hiddenIds = new Set<string>();
+    for (const p of prefs) {
+      if (p.pinned_at) pinnedIds.add(p.project_id);
+      if (p.hidden_at) hiddenIds.add(p.project_id);
+    }
+    return { pinnedIds, hiddenIds };
+  }, [prefs]);
+
+  const recents = useMemo<RecentTarget[]>(
+    () => (open ? readRecents().filter((r) => !hiddenIds.has(r.project_id)) : []),
+    [open, hiddenIds],
+  );
   const q = search.trim().toLowerCase();
 
-  const projects = useMemo(() => {
-    if (!catalog) return [];
-    if (!q) return catalog.projects;
-    // Filter projects by client+project text. Tasks shown via flat-result section below.
-    return catalog.projects.filter((p) =>
-      `${p.client_name ?? ''} ${p.name}`.toLowerCase().includes(q),
-    );
-  }, [catalog, q]);
+  // Browsing: pinned first, then a collapsible group per client (clients by
+  // name, "No client" last). Hidden projects stay out until you search.
+  const browse = useMemo(() => {
+    if (!catalog) return { pinned: [], groups: [] as ClientGroup[], hiddenCount: 0 };
+    const visible = catalog.projects.filter((p) => !hiddenIds.has(p.id));
+    const pinned = visible.filter((p) => pinnedIds.has(p.id)).sort(byName);
+    const byKey = new Map<string, ClientGroup>();
+    for (const p of visible) {
+      if (pinnedIds.has(p.id)) continue;
+      const key = p.client_id ?? NO_CLIENT_KEY;
+      const g = byKey.get(key);
+      if (g) g.projects.push(p);
+      else byKey.set(key, { key, name: p.client_id ? (p.client_name ?? '—') : null, projects: [p] });
+    }
+    const groups = Array.from(byKey.values()).sort((a, b) => {
+      if (a.name === null) return 1;
+      if (b.name === null) return -1;
+      return nameCollator.compare(a.name, b.name);
+    });
+    for (const g of groups) g.projects.sort(byName);
+    return { pinned, groups, hiddenCount: catalog.projects.length - visible.length };
+  }, [catalog, pinnedIds, hiddenIds]);
+
+  // Searching: every project, hidden ones included (marked, and listed last).
+  const searchProjects = useMemo(() => {
+    if (!catalog || !q) return [];
+    return catalog.projects
+      .filter((p) => `${p.client_name ?? ''} ${p.name}`.toLowerCase().includes(q))
+      .sort(
+        (a, b) =>
+          rankOf(a.id, pinnedIds, hiddenIds) - rankOf(b.id, pinnedIds, hiddenIds) || byName(a, b),
+      );
+  }, [catalog, q, pinnedIds, hiddenIds]);
 
   // Flat task search results (only when searching)
   const taskResults = useMemo(() => {
@@ -52,8 +124,12 @@ export function TaskTargetPicker({ open, onOpenChange, value, onPick }: Props) {
       if (!full.includes(q)) continue;
       out.push({ wi, project, path });
     }
+    out.sort(
+      (a, b) =>
+        rankOf(a.project.id, pinnedIds, hiddenIds) - rankOf(b.project.id, pinnedIds, hiddenIds),
+    );
     return out.slice(0, 200);
-  }, [catalog, q]);
+  }, [catalog, q, pinnedIds, hiddenIds]);
 
   // Suggestion to use search text as custom task on a sensible project
   const customSuggestion = useMemo(() => {
@@ -61,9 +137,11 @@ export function TaskTargetPicker({ open, onOpenChange, value, onPick }: Props) {
     const targetProj =
       catalog.projects.find((p) => p.id === value?.project_id) ??
       catalog.projects.find((p) => p.id === recents[0]?.project_id) ??
+      browse.pinned[0] ??
+      catalog.projects.find((p) => !hiddenIds.has(p.id)) ??
       catalog.projects[0];
     return { project: targetProj, text: search.trim() };
-  }, [catalog, q, search, value?.project_id, recents]);
+  }, [catalog, q, search, value?.project_id, recents, browse.pinned, hiddenIds]);
 
   function emit(target: TrackerTarget) {
     onPick(target);
@@ -93,6 +171,34 @@ export function TaskTargetPicker({ open, onOpenChange, value, onPick }: Props) {
       return next;
     });
   }
+  function toggleClient(key: string) {
+    setOpenClients((cur) => {
+      const next = new Set(cur);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  const renderProject = (p: TrackerCatalogProject, showClient: boolean) => (
+    <ProjectRow
+      key={p.id}
+      project={p}
+      catalog={catalog!}
+      showClient={showClient}
+      pinned={pinnedIds.has(p.id)}
+      hidden={hiddenIds.has(p.id)}
+      expanded={expanded.has(p.id)}
+      onToggle={() => toggleProject(p.id)}
+      onPickProject={() => pickProject(p)}
+      onPickWorkItem={(wi) => pickWorkItem(p, wi)}
+      onPickCustom={(text) => pickCustom(p, text)}
+      value={value}
+    />
+  );
+
+  // A single client group needs no collapsing.
+  const singleGroup = browse.groups.length === 1;
 
   return (
     <Dialog
@@ -140,22 +246,56 @@ export function TaskTargetPicker({ open, onOpenChange, value, onPick }: Props) {
               </Section>
             )}
 
-            {/* Projects — primary list, click = pick-with-no-task */}
-            {projects.length > 0 && (
+            {!q && browse.pinned.length > 0 && (
+              <Section icon={<Pin size={12} />} label={t('tracker.pinned')}>
+                {browse.pinned.map((p) => renderProject(p, true))}
+              </Section>
+            )}
+
+            {/* Projects by client — click a project = pick-with-no-task */}
+            {!q && browse.groups.length > 0 && (
               <Section icon={<Briefcase size={12} />} label={t('tracker.projects')}>
-                {projects.map((p) => (
-                  <ProjectRow
-                    key={p.id}
-                    project={p}
-                    catalog={catalog!}
-                    expanded={expanded.has(p.id)}
-                    onToggle={() => toggleProject(p.id)}
-                    onPickProject={() => pickProject(p)}
-                    onPickWorkItem={(wi) => pickWorkItem(p, wi)}
-                    onPickCustom={(text) => pickCustom(p, text)}
-                    value={value}
-                  />
-                ))}
+                {browse.groups.map((g) => {
+                  const isOpen = singleGroup || openClients.has(g.key);
+                  return (
+                    <div key={g.key}>
+                      {!singleGroup && (
+                        <button
+                          type="button"
+                          onClick={() => toggleClient(g.key)}
+                          aria-expanded={isOpen}
+                          className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded text-sm text-left text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                        >
+                          {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                          <Building2 size={12} className="text-neutral-400 dark:text-neutral-500" />
+                          <span className="truncate font-medium">{g.name ?? t('tracker.noClient')}</span>
+                          <span className="text-[11px] text-neutral-400 dark:text-neutral-500 tabular-nums">
+                            {g.projects.length}
+                          </span>
+                        </button>
+                      )}
+                      {isOpen && (
+                        <div className={singleGroup ? '' : 'ml-4 border-l border-neutral-200 dark:border-neutral-800 pl-1'}>
+                          {g.projects.map((p) => renderProject(p, singleGroup))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </Section>
+            )}
+
+            {!q && browse.hiddenCount > 0 && (
+              <div className="flex items-center gap-1.5 px-2 text-[11px] text-neutral-400 dark:text-neutral-500">
+                <EyeOff size={11} />
+                {t('tracker.hiddenProjectsHint', { count: browse.hiddenCount })}
+              </div>
+            )}
+
+            {/* Project matches when searching */}
+            {q && searchProjects.length > 0 && (
+              <Section icon={<Briefcase size={12} />} label={t('tracker.projects')}>
+                {searchProjects.map((p) => renderProject(p, true))}
               </Section>
             )}
 
@@ -170,6 +310,7 @@ export function TaskTargetPicker({ open, onOpenChange, value, onPick }: Props) {
                     className="w-full flex items-center gap-1 px-2 py-1.5 rounded text-sm text-left hover:bg-neutral-100 dark:hover:bg-neutral-800"
                   >
                     <PathSegments parts={[project.client_name ?? '—', project.name, ...path]} />
+                    {hiddenIds.has(project.id) && <HiddenMark />}
                   </button>
                 ))}
               </Section>
@@ -193,7 +334,7 @@ export function TaskTargetPicker({ open, onOpenChange, value, onPick }: Props) {
               </Section>
             )}
 
-            {!isLoading && q && projects.length === 0 && taskResults.length === 0 && !customSuggestion && (
+            {!isLoading && q && searchProjects.length === 0 && taskResults.length === 0 && !customSuggestion && (
               <div className="text-sm text-neutral-500 dark:text-neutral-400 px-2">{t('tracker.noResults')}</div>
             )}
           </div>
@@ -207,11 +348,46 @@ export function TaskTargetPicker({ open, onOpenChange, value, onPick }: Props) {
   );
 }
 
+// Search order: pinned, then ordinary, then hidden projects.
+function rankOf(id: string, pinned: Set<string>, hidden: Set<string>): number {
+  return pinned.has(id) ? 0 : hidden.has(id) ? 2 : 1;
+}
+
+function HiddenMark() {
+  const t = useT();
+  return (
+    <span title={t('tracker.hiddenProject')} className="shrink-0 text-neutral-400 dark:text-neutral-500">
+      <EyeOff size={12} />
+    </span>
+  );
+}
+
+function readOpenClients(): Set<string> {
+  try {
+    const raw = localStorage.getItem(OPEN_CLIENTS_KEY);
+    const v: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function saveOpenClients(s: Set<string>) {
+  try {
+    localStorage.setItem(OPEN_CLIENTS_KEY, JSON.stringify(Array.from(s)));
+  } catch {
+    // Storage unavailable — groups just won't stay open across visits.
+  }
+}
+
 // ----- Project row (collapsible) ---------------------------------------------
 
 function ProjectRow({
   project,
   catalog,
+  showClient,
+  pinned,
+  hidden,
   expanded,
   onToggle,
   onPickProject,
@@ -221,6 +397,10 @@ function ProjectRow({
 }: {
   project: TrackerCatalogProject;
   catalog: TrackerCatalog;
+  /** Off under a client heading, which already names the client. */
+  showClient: boolean;
+  pinned: boolean;
+  hidden: boolean;
   expanded: boolean;
   onToggle: () => void;
   onPickProject: () => void;
@@ -249,7 +429,9 @@ function ProjectRow({
             active ? 'bg-neutral-200 dark:bg-neutral-800' : 'hover:bg-neutral-100 dark:hover:bg-neutral-800',
           ].join(' ')}
         >
-          <PathSegments parts={[project.client_name ?? '—', project.name]} />
+          <PathSegments parts={showClient ? [project.client_name ?? '—', project.name] : [project.name]} />
+          {pinned && <Pin size={11} className="shrink-0 text-amber-600 dark:text-amber-400" fill="currentColor" />}
+          {hidden && <HiddenMark />}
           <span className="ml-auto text-[11px] text-neutral-500 dark:text-neutral-400 shrink-0">
             {t('tracker.noTask')}
           </span>
@@ -478,28 +660,44 @@ interface TriggerProps {
   onClick: () => void;
   onClear?: () => void;
   placeholder?: string;
+  title?: string;
 }
 
-export function TaskTargetTrigger({ value, catalog, onClick, onClear, placeholder }: TriggerProps) {
+export function TaskTargetTrigger({ value, catalog, onClick, onClear, placeholder, title }: TriggerProps) {
   const t = useT();
   const label = useMemo(() => {
     if (!value || !catalog) return null;
     return labelForTarget(value, catalog);
   }, [value, catalog]);
 
+  const button = (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex-1 min-w-0 flex items-center gap-2 px-3 h-9 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm text-left hover:bg-neutral-50 dark:hover:bg-neutral-800"
+    >
+      {label ? (
+        <PathSegments parts={label} />
+      ) : (
+        <span className="text-neutral-400 dark:text-neutral-500">{placeholder ?? t('tracker.pickTarget')}</span>
+      )}
+    </button>
+  );
+
   return (
     <div className="flex items-center gap-1.5">
-      <button
-        type="button"
-        onClick={onClick}
-        className="flex-1 flex items-center gap-2 px-3 h-9 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm text-left hover:bg-neutral-50 dark:hover:bg-neutral-800"
-      >
-        {label ? (
-          <PathSegments parts={label} />
-        ) : (
-          <span className="text-neutral-400 dark:text-neutral-500">{placeholder ?? t('tracker.pickTarget')}</span>
-        )}
-      </button>
+      {/* The path is truncated to fit, so hovering shows it in full. */}
+      {label || title ? (
+        <Tooltip>
+          <TooltipTrigger asChild>{button}</TooltipTrigger>
+          <TooltipContent className="max-w-md break-words">
+            {label && <TargetPathText parts={label} />}
+            {title && <div className={label ? 'mt-1 opacity-70' : ''}>{title}</div>}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        button
+      )}
       {value && onClear && (
         <button
           type="button"
@@ -511,6 +709,20 @@ export function TaskTargetTrigger({ value, catalog, onClick, onClear, placeholde
           <X size={14} />
         </button>
       )}
+    </div>
+  );
+}
+
+// Full "Client › Project › Task" text for tooltips; the last segment stands out.
+export function TargetPathText({ parts }: { parts: string[] }) {
+  return (
+    <div>
+      {parts.map((p, i) => (
+        <span key={i}>
+          {i > 0 && <span className="opacity-60"> › </span>}
+          <span className={i === parts.length - 1 ? 'font-medium' : ''}>{p}</span>
+        </span>
+      ))}
     </div>
   );
 }

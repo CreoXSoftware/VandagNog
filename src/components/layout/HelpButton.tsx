@@ -14,7 +14,7 @@ type PageKey =
   | 'workload'
   | 'tracker'
   | 'clients'
-  | 'teams'
+  | 'orgs'
   | 'profile'
   | 'general';
 
@@ -39,7 +39,7 @@ function pageOf(pathname: string): PageKey {
   if (/\/workload$/.test(p)) return 'workload';
   if (/\/tracker(\/reports)?$/.test(p)) return 'tracker';
   if (/\/clients$/.test(p)) return 'clients';
-  if (/\/teams(\/[^/]+)?$/.test(p)) return 'teams';
+  if (/\/orgs(\/[^/]+)?$/.test(p)) return 'orgs';
   if (/\/profile$/.test(p)) return 'profile';
   return 'general';
 }
@@ -159,10 +159,12 @@ const PAGES: Record<PageKey, { name: TKey; intro: TKey; sections: HelpSection[] 
     intro: 'help.clients.intro',
     sections: [{ items: [{ text: 'help.clients.scope' }, { text: 'help.clients.delete' }] }],
   },
-  teams: {
-    name: 'help.teams.name',
-    intro: 'help.teams.intro',
-    sections: [{ items: [{ text: 'help.teams.join' }, { text: 'help.teams.add' }] }],
+  orgs: {
+    name: 'help.orgs.name',
+    intro: 'help.orgs.intro',
+    sections: [
+      { items: [{ text: 'help.orgs.roles' }, { text: 'help.orgs.join' }, { text: 'help.orgs.guests' }] },
+    ],
   },
   profile: {
     name: 'help.profile.name',

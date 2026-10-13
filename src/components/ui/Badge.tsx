@@ -5,6 +5,10 @@ const roleClass: Record<string, string> = {
   owner: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
   editor: 'bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300',
   viewer: 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300',
+  // Organization roles (owner shares the project owner colour).
+  admin: 'bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300',
+  member: 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300',
+  guest: 'bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300',
   default: 'bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300',
 };
 

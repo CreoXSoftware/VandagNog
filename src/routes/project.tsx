@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearch, useNavigate } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import { CheckCircle2, Pencil, RotateCcw } from 'lucide-react';
@@ -19,6 +19,7 @@ import { ProjectClientField } from '@/components/client/ProjectClientField';
 import { ProjectSwitcher } from '@/components/project/ProjectSwitcher';
 import { CompletedBadge } from '@/components/project/CompletedBadge';
 import { cn } from '@/lib/utils';
+import { useCurrentOrg } from '@/lib/currentOrg';
 import type { ProjectRole } from '@/types/db';
 import { useT, type TKey } from '@/lib/i18n';
 
@@ -39,6 +40,17 @@ export function ProjectPage() {
   const { data: members = [] } = useMembers(projectId);
   const { data: role } = useMyRole(projectId);
   const setCompleted = useSetProjectCompleted();
+  const { org, setOrgId } = useCurrentOrg();
+
+  // Opening a project of another organization (a link, a notification) makes
+  // that org the current one, so the top bar and every list match it. Once per
+  // project: picking another org in the top bar from here must not bounce back.
+  const syncedOrgFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!project || syncedOrgFor.current === project.id) return;
+    syncedOrgFor.current = project.id;
+    if (project.org_id !== org.id) setOrgId(project.org_id);
+  }, [project, org.id, setOrgId]);
 
   const view = search.view ?? 'gantt';
   const selectedItem = search.item ? workItems.find((w) => w.id === search.item) : undefined;
@@ -72,6 +84,9 @@ export function ProjectPage() {
   }
 
   const canEdit: boolean = role === 'owner' || role === 'editor';
+  // Project settings (name, description, organization, delete) are for owners:
+  // org owners/admins, the creator, or whoever was made owner.
+  const isOwner = role === 'owner';
   const myRole: ProjectRole | null = role ?? null;
   const completed = !!project.completed_at;
 
@@ -94,7 +109,7 @@ export function ProjectPage() {
         {project.description && (
           <div className="text-xs text-neutral-500 dark:text-neutral-400 truncate max-w-md">{project.description}</div>
         )}
-        {canEdit && (
+        {isOwner && (
           <button
             onClick={() => setEditOpen(true)}
             className="p-1 text-neutral-500 dark:text-neutral-400 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded"
@@ -104,7 +119,7 @@ export function ProjectPage() {
             <Pencil size={14} />
           </button>
         )}
-        <ProjectClientField projectId={projectId} canEdit={role === 'owner'} />
+        <ProjectClientField projectId={projectId} orgId={project.org_id} canEdit={isOwner} />
         <div className="flex-1" />
         <ProjectSummary
           workItems={workItems}
@@ -170,7 +185,7 @@ export function ProjectPage() {
           />
         )}
         {view === 'members' && (
-          <MembersPanel projectId={projectId} members={members} myRole={myRole} />
+          <MembersPanel project={project} members={members} myRole={myRole} />
         )}
       </div>
       {selectedItem && (
@@ -190,7 +205,7 @@ export function ProjectPage() {
           onNavigate={(id) => selectItem(id)}
         />
       )}
-      <EditProjectDialog project={project} open={editOpen} onOpenChange={setEditOpen} canDelete={role === 'owner'} />
+      {isOwner && <EditProjectDialog project={project} open={editOpen} onOpenChange={setEditOpen} />}
     </div>
   );
 }

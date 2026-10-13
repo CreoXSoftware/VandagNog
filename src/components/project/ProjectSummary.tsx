@@ -132,7 +132,8 @@ export function ProjectSummary({ workItems, workingDays, nonWorkingDays, members
             })}
           </Row>
           <Row icon={<Users size={12} />} label={t('summary.members')}>
-            {members.length}
+            {/* People added to it; every org member can edit it anyway. */}
+            {members.filter((m) => m.direct_role !== null).length}
           </Row>
           <Row icon={<CalendarOff size={12} />} label={t('summary.nonWorking')}>
             {t('summary.nonWorkingValue', {

@@ -85,7 +85,7 @@ export function TimeImportDialog({ open, onOpenChange }: Props) {
   const groupsSig = groups && signature ? signature : null;
   const [dec, setDec] = useState<{ sig: string | null; d: Decisions | null }>({ sig: null, d: null });
   if (groups && dir.data && dec.sig !== groupsSig) {
-    setDec({ sig: groupsSig, d: initialDecisions(groups, dir.data) });
+    setDec({ sig: groupsSig, d: initialDecisions(groups) });
   }
   const decisions = dec.sig === groupsSig ? dec.d : null;
   const update = (fn: (d: Decisions) => Decisions) =>
@@ -646,8 +646,7 @@ function ClientRow({
   const value = !decision ? '' : decision.kind === 'existing' ? `e:${decision.clientId}` : decision.kind;
   const suggestions = [...exact, ...similar];
   const suggestedIds = new Set(suggestions.map((s) => s.id));
-  const label = (c: Directory['clients'][number]) =>
-    `${c.name} — ${c.scope === 'team' ? (c.teamName ?? t('tracker.import.team')) : t('tracker.import.private')}`;
+  const label = (c: Directory['clients'][number]) => c.name;
 
   return (
     <div className="py-2" data-client={groupKey}>
@@ -661,8 +660,7 @@ function ClientRow({
             const v = e.target.value;
             if (!v) onChange(null);
             else if (v === 'none') onChange({ kind: 'none' });
-            else if (v === 'create')
-              onChange({ kind: 'create', name: name.trim(), teamId: dir.teams.length === 1 ? dir.teams[0].id : null });
+            else if (v === 'create') onChange({ kind: 'create', name: name.trim() });
             else onChange({ kind: 'existing', clientId: v.slice(2) });
           }}
           className={cn(selectCls(!decision), 'w-64')}
@@ -684,25 +682,12 @@ function ClientRow({
           <option value="none">{t('tracker.import.noClient')}</option>
         </select>
         {decision?.kind === 'create' && (
-          <>
-            <input
-              value={decision.name}
-              onChange={(e) => onChange({ ...decision, name: e.target.value })}
-              className={cn(inputCls, 'w-44', !decision.name.trim() && 'border-red-400')}
-              aria-label={t('tracker.import.newClientName')}
-            />
-            <select
-              value={decision.teamId ?? ''}
-              onChange={(e) => onChange({ ...decision, teamId: e.target.value || null })}
-              className={cn(selectCls(false), 'w-36')}
-              aria-label={t('tracker.import.clientScope')}
-            >
-              <option value="">{t('tracker.import.private')}</option>
-              {dir.teams.map((tm) => (
-                <option key={tm.id} value={tm.id}>{tm.name}</option>
-              ))}
-            </select>
-          </>
+          <input
+            value={decision.name}
+            onChange={(e) => onChange({ ...decision, name: e.target.value })}
+            className={cn(inputCls, 'w-44', !decision.name.trim() && 'border-red-400')}
+            aria-label={t('tracker.import.newClientName')}
+          />
         )}
       </div>
       {reason === 'similar' && (

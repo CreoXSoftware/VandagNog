@@ -7,7 +7,7 @@ import { markLocalWorkItemMutation } from '@/lib/localMutationGuard';
 import { dependenciesKey } from './useDependencies';
 import { nonWorkingDaysKey } from './useNonWorkingDays';
 import { projectKey } from './useProjects';
-import { tasksDataKey, type TasksData } from './useTasksData';
+import { findTasksData, tasksDataKey, type TasksData } from './useTasksData';
 import { collectSubtreeIds, type ReparentUpdate } from '@/lib/workItemTree';
 
 export const workItemsKey = (projectId: string) => ['work_items', projectId] as const;
@@ -16,24 +16,29 @@ export const workItemsKey = (projectId: string) => ['work_items', projectId] as 
 // item into or out of the bin invalidates it.
 export const deletedWorkItemsKey = ['work_items', 'deleted'] as const;
 
-// The global Tasks page holds every work item in one cache entry, so a
-// project-scoped mutation has to patch it too or the row won't move until the
-// next refetch. These helpers keep that cache in step without making the
-// mutations depend on the page being mounted (they no-op when it isn't).
+// The global Tasks page holds every work item of an organization in one cache
+// entry (one per org visited), so a project-scoped mutation has to patch it too
+// or the row won't move until the next refetch. These helpers keep those caches
+// in step without making the mutations depend on the page being mounted (they
+// no-op when it isn't).
+type TasksSnapshot = [readonly unknown[], TasksData | undefined][];
+
 function patchTasksCache(
   qc: ReturnType<typeof useQueryClient>,
   apply: (items: WorkItem[]) => WorkItem[],
-): TasksData | undefined {
-  const prev = qc.getQueryData<TasksData>(tasksDataKey);
-  if (prev) qc.setQueryData<TasksData>(tasksDataKey, { ...prev, items: apply(prev.items) });
+): TasksSnapshot {
+  const prev = qc.getQueriesData<TasksData>({ queryKey: tasksDataKey });
+  for (const [key, data] of prev) {
+    if (data) qc.setQueryData<TasksData>(key, { ...data, items: apply(data.items) });
+  }
   return prev;
 }
 
 function restoreTasksCache(
   qc: ReturnType<typeof useQueryClient>,
-  prev: TasksData | undefined,
+  prev: TasksSnapshot | undefined,
 ): void {
-  if (prev) qc.setQueryData<TasksData>(tasksDataKey, prev);
+  for (const [key, data] of prev ?? []) qc.setQueryData(key, data);
 }
 
 export function useWorkItems(projectId: string | undefined) {
@@ -302,7 +307,7 @@ export function useRescheduleFrom() {
       ]);
       const prev = qc.getQueryData<WorkItem[]>(workItemsKey(input.project_id));
       const prevDeps = qc.getQueryData<Dependency[]>(dependenciesKey(input.project_id));
-      const tasks = qc.getQueryData<TasksData>(tasksDataKey);
+      const tasks = findTasksData(qc, input.project_id);
 
       // The project caches are cold when this runs from the global Tasks page
       // without the drawer open. The Tasks dataset carries the same rows, edges

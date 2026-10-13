@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button';
 import { signOut, useAuth } from '@/hooks/useAuth';
 import { NotificationBell } from './NotificationBell';
 import { HelpButton } from './HelpButton';
+import { OrgSwitcher } from './OrgSwitcher';
 import { Avatar } from '@/components/ui/Avatar';
 import { useProfile } from '@/hooks/useProfile';
 import { displayName } from '@/lib/userDisplay';
@@ -33,6 +34,7 @@ export function Header() {
       <Link to="/projects" className="flex items-center" aria-label={t('app.name')}>
         <img src={theme === 'dark' ? logoDark : logoLight} alt={t('app.name')} className="h-10 w-auto rounded-md" />
       </Link>
+      <OrgSwitcher />
       <nav className="flex-1" />
       <HelpButton />
       <select

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useT } from '@/lib/i18n';
 import { useWorkloadData } from '@/hooks/useWorkloadData';
 import { WorkloadFilters } from '@/components/workload/WorkloadFilters';
@@ -7,37 +7,51 @@ import { toDateString } from '@/components/gantt/ganttUtils';
 import { isOverdue } from '@/lib/workload';
 import type { WorkItem } from '@/types/db';
 
+const SHOW_GUESTS_KEY = 'vn.workload.showGuests';
+
+function readShowGuests(): boolean {
+  try {
+    return localStorage.getItem(SHOW_GUESTS_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
 export function WorkloadPage() {
   const t = useT();
   const { data, isLoading, error } = useWorkloadData();
 
   const [projectIds, setProjectIds] = useState<string[]>([]);
   const [personIds, setPersonIds] = useState<string[]>([]);
-  const [teamIds, setTeamIds] = useState<string[]>([]);
+  const [showGuests, setShowGuests] = useState(readShowGuests);
   const [search, setSearch] = useState('');
   const [hideEmpty, setHideEmpty] = useState(true);
   const [overdueOnly, setOverdueOnly] = useState(false);
 
-  // People selectable in the filter — narrowed by the team filter so you pick team members.
+  useEffect(() => {
+    try {
+      localStorage.setItem(SHOW_GUESTS_KEY, showGuests ? '1' : '0');
+    } catch {
+      // not remembered, still works
+    }
+  }, [showGuests]);
+
+  const hasGuests = useMemo(() => (data?.people ?? []).some((p) => p.is_guest), [data]);
+
+  // People selectable in the filter — without guests while they are hidden.
   const availablePeople = useMemo(() => {
     if (!data) return [];
-    if (teamIds.length === 0) return data.people;
-    const allowed = new Set(teamIds.flatMap((id) => data.teamMembership[id] ?? []));
-    return data.people.filter((p) => allowed.has(p.user_id));
-  }, [data, teamIds]);
+    return showGuests ? data.people : data.people.filter((p) => !p.is_guest);
+  }, [data, showGuests]);
 
   const rows: WorkloadRow[] = useMemo(() => {
     if (!data) return [];
     const projectSet = new Set(projectIds);
     const personSet = new Set(personIds);
-    const allowedPeople =
-      teamIds.length === 0
-        ? null
-        : new Set(teamIds.flatMap((id) => data.teamMembership[id] ?? []));
     const q = search.trim().toLowerCase();
 
     let people = data.people;
-    if (allowedPeople) people = people.filter((p) => allowedPeople.has(p.user_id));
+    if (!showGuests) people = people.filter((p) => !p.is_guest);
     if (personSet.size > 0) people = people.filter((p) => personSet.has(p.user_id));
     if (q) people = people.filter((p) => p.display_name.toLowerCase().includes(q));
 
@@ -61,7 +75,7 @@ export function WorkloadPage() {
     if (hideEmpty || overdueOnly) result = result.filter((r) => r.tasks.length > 0);
     result.sort((a, b) => b.overdue - a.overdue);
     return result.map(({ person, tasks }) => ({ person, tasks }));
-  }, [data, projectIds, personIds, teamIds, search, hideEmpty, overdueOnly]);
+  }, [data, projectIds, personIds, showGuests, search, hideEmpty, overdueOnly]);
 
   const projectNameById = useMemo(
     () => new Map((data?.projects ?? []).map((p) => [p.id, p.name])),
@@ -83,9 +97,9 @@ export function WorkloadPage() {
           people={availablePeople}
           personIds={personIds}
           setPersonIds={setPersonIds}
-          teams={data?.teams ?? []}
-          teamIds={teamIds}
-          setTeamIds={setTeamIds}
+          hasGuests={hasGuests}
+          showGuests={showGuests}
+          setShowGuests={setShowGuests}
           search={search}
           setSearch={setSearch}
           hideEmpty={hideEmpty}
