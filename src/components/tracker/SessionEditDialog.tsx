@@ -8,7 +8,8 @@ import { useT } from '@/lib/i18n';
 import { useDeleteTimeEntry, useUpdateTimeEntry } from '@/hooks/useTimeEntries';
 import { useTrackerCatalog } from '@/hooks/useTrackerCatalog';
 import { TaskTargetPicker, TaskTargetTrigger } from './TaskTargetPicker';
-import { combineDateTime, isoDate, isoTime } from '@/lib/timeFormat';
+import { NextDayMark } from './ManualEntryForm';
+import { daysApart, isoDate, isoTime, sessionRange } from '@/lib/timeFormat';
 import type { TimeEntry, TrackerTarget } from '@/types/db';
 
 interface Props {
@@ -36,9 +37,18 @@ export function SessionEditDialog({ entry, open, onOpenChange }: Props) {
   const [notes, setNotes] = useState<string>(entry.notes ?? '');
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  const startDt = combineDateTime(date, start);
-  const endDt = combineDateTime(date, end);
-  const valid = endDt > startDt;
+  // Only re-derive the times when one of them was edited: the inputs hold
+  // minutes on a single date, so re-saving an untouched session would drop its
+  // seconds and cut one that lasted longer than a day.
+  const timesChanged = date !== isoDate(startD) || start !== isoTime(startD) || end !== isoTime(endD);
+  const range = sessionRange(date, start, end);
+  const startIso = timesChanged ? range.start.toISOString() : entry.start_at;
+  const endIso = timesChanged || !entry.end_at ? range.end.toISOString() : entry.end_at;
+  const valid = !timesChanged || range.end > range.start;
+  // An end before the start runs past midnight (sessionRange); untouched, show
+  // how many days the stored session actually spans.
+  const endDate = timesChanged ? range.end : endD;
+  const endDays = timesChanged ? (range.nextDay ? 1 : 0) : daysApart(startD, endD);
 
   async function onSave() {
     if (!valid) {
@@ -53,8 +63,8 @@ export function SessionEditDialog({ entry, open, onOpenChange }: Props) {
           work_item_id: target.work_item_id,
           custom_task_text: target.custom_task_text,
           notes: notes.trim() || null,
-          start_at: startDt.toISOString(),
-          end_at: endDt.toISOString(),
+          start_at: startIso,
+          end_at: endIso,
         },
       });
       toast.success(t('tracker.entrySaved'));
@@ -95,7 +105,10 @@ export function SessionEditDialog({ entry, open, onOpenChange }: Props) {
               <Input type="time" value={start} onChange={(e) => setStart(e.target.value)} />
             </div>
             <div>
-              <label className="text-xs text-neutral-500 dark:text-neutral-400">{t('tracker.endTime')}</label>
+              <label className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+                {t('tracker.endTime')}
+                {endDays > 0 && <NextDayMark days={endDays} date={endDate} />}
+              </label>
               <Input type="time" value={end} onChange={(e) => setEnd(e.target.value)} />
             </div>
           </div>

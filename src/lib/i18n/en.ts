@@ -502,6 +502,8 @@ export const en = {
     addNote: 'Add note',
     willLog: 'Will log {duration}',
     endBeforeStart: 'End must be after start',
+    plusDays: '+{n}d',
+    endsOn: 'Ends on {date}',
     addEntry: 'Add entry',
     entryAdded: 'Entry added',
     editEntry: 'Edit session',

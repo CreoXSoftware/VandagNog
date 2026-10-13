@@ -48,6 +48,27 @@ export function combineDateTime(date: string, time: string): Date {
   return new Date(y, (mo ?? 1) - 1, da ?? 1, h ?? 0, mi ?? 0, 0, 0);
 }
 
+// A session entered as one date plus start and end times. An end earlier than
+// the start means it ran past midnight, so it ends on the next day.
+export function sessionRange(
+  date: string,
+  start: string,
+  end: string,
+): { start: Date; end: Date; nextDay: boolean } {
+  const s = combineDateTime(date, start);
+  const e = combineDateTime(date, end);
+  if (e >= s) return { start: s, end: e, nextDay: false };
+  const next = new Date(e.getFullYear(), e.getMonth(), e.getDate() + 1, e.getHours(), e.getMinutes());
+  return { start: s, end: next, nextDay: true };
+}
+
+// Calendar days between two moments' local dates (0 = same day).
+export function daysApart(a: Date, b: Date): number {
+  const da = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const db = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((db - da) / 86_400_000);
+}
+
 // ISO date of the Monday of the week containing d (local time).
 export function weekStartIso(d: Date): string {
   const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());

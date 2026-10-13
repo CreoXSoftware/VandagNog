@@ -505,6 +505,8 @@ export const af: Dict = {
     addNote: 'Voeg nota by',
     willLog: 'Sal {duration} aanteken',
     endBeforeStart: 'Einde moet na begin wees',
+    plusDays: '+{n}d',
+    endsOn: 'Eindig op {date}',
     addEntry: 'Voeg inskrywing by',
     entryAdded: 'Inskrywing bygevoeg',
     editEntry: 'Wysig sessie',

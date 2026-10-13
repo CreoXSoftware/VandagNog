@@ -7,7 +7,7 @@ import { useT } from '@/lib/i18n';
 import { useCreateManualEntry, pushRecent } from '@/hooks/useTimeEntries';
 import { useTrackerCatalog } from '@/hooks/useTrackerCatalog';
 import { TaskTargetPicker, TaskTargetTrigger } from './TaskTargetPicker';
-import { combineDateTime, isoDate, isoTime, formatHM, formatHMS } from '@/lib/timeFormat';
+import { formatDateHuman, formatHM, formatHMS, isoDate, isoTime, sessionRange } from '@/lib/timeFormat';
 import type { TrackerTarget } from '@/types/db';
 
 interface Props {
@@ -28,8 +28,8 @@ export function ManualEntryForm({ target, setTarget, header }: Props) {
   const [end, setEnd] = useState<string>(() => isoTime(new Date()));
   const [notes, setNotes] = useState('');
 
-  const startDt = combineDateTime(date, start);
-  const endDt = combineDateTime(date, end);
+  // 22:30 – 03:30 is an overnight session: the end falls on the next day.
+  const { start: startDt, end: endDt, nextDay } = sessionRange(date, start, end);
   const valid = endDt > startDt;
   const previewMs = valid ? endDt.getTime() - startDt.getTime() : 0;
 
@@ -134,6 +134,7 @@ export function ManualEntryForm({ target, setTarget, header }: Props) {
           required
           className="w-[8.75rem] shrink-0"
         />
+        {nextDay && <NextDayMark days={1} date={endDt} />}
         <span
           className={cn(
             'text-[11px]',
@@ -151,5 +152,18 @@ export function ManualEntryForm({ target, setTarget, header }: Props) {
         onPick={(t) => setTarget(t)}
       />
     </form>
+  );
+}
+
+// "+1d" beside an end time that falls on a later day than the start.
+export function NextDayMark({ days, date }: { days: number; date: Date }) {
+  const t = useT();
+  return (
+    <span
+      title={t('tracker.endsOn', { date: formatDateHuman(date) })}
+      className="shrink-0 rounded px-1 text-[11px] font-medium tabular-nums bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+    >
+      {t('tracker.plusDays', { n: days })}
+    </span>
   );
 }
