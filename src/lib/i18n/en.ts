@@ -339,6 +339,8 @@ export const en = {
     quick: {
       assignee: 'Assign',
       duration: 'Duration',
+      endDate: 'End date',
+      endHint: 'A non-working day moves back to the working day before. Enter saves · Esc cancels',
       assigneeSearch: 'Search people…',
       noMatches: 'No one matches.',
       assigneeHint: '↑ ↓ to choose · Enter assigns · Esc cancels',
@@ -854,7 +856,7 @@ export const en = {
     button: 'Help & shortcuts',
     tooltip: 'Tips & shortcuts for {page}',
     title: 'Help — {page}',
-    macNote: 'On a Mac, ⌥ (Option) works in place of ⌘ as well — use ⌥T for duration, since Chrome keeps ⌘T for new tabs.',
+    macNote: 'On a Mac, ⌥ (Option) works in place of ⌘ as well — use ⌥N and ⌥L, since Chrome keeps ⌘N for new windows and ⌘L for the address bar.',
     general: {
       name: 'this page',
       intro: 'VandagNog plans projects as task trees on a gantt chart, and pulls your work together on the Tasks page.',
@@ -878,7 +880,8 @@ export const en = {
       kDesc: 'Edit the description, beside the name',
       kAssign: 'Assign to someone in the project',
       kDuration: 'Duration in working days — 3, 3d or 2w',
-      quickNote: 'Assign and Duration open a pop-up in the middle of the screen: Enter saves, and the same shortcuts jump between its fields, saving as they go. Esc closes without saving.',
+      kEnd: 'End date — the start date stays where it is',
+      quickNote: 'Assign, Duration and End date open a pop-up in the middle of the screen: Enter saves, and the same shortcuts jump between its fields, saving as they go. Esc closes without saving.',
       organiseTitle: 'Organising',
       rename: 'Click a task name to edit it. It saves when you leave the field.',
       drag: 'Drag a task by its ⋮⋮ handle: drop on the top or bottom edge of another task to place it before or after, or on the middle to make it a sub-task.',

@@ -1,10 +1,10 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as RD from '@radix-ui/react-dialog';
-import { Check, Clock, User } from 'lucide-react';
+import { CalendarCheck, Check, Clock, User } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
-import { modLabel, quickKeyOf, type QuickKey } from '@/lib/platform';
+import { quickKeyOf, quickLabel, type QuickKey } from '@/lib/platform';
 import { parseQuickDuration } from '@/lib/duration';
 import { parseDate } from '@/components/gantt/ganttUtils';
 import type { TasksPerson } from '@/hooks/useTasksData';
@@ -15,8 +15,11 @@ export interface DurationPreview {
   end: string;
 }
 
-/** The panes the pop-up has. The description is edited in the row itself. */
-export type QuickPane = Exclude<QuickKey, 'd'>;
+/** The dates an end date would produce, or why it can't be used. */
+export type EndPreview = (DurationPreview & { label: string }) | { error: string };
+
+/** The panes the pop-up has. The note (description) is edited in the row itself. */
+export type QuickPane = Exclude<QuickKey, 'note'>;
 
 interface Props {
   item: WorkItem;
@@ -27,16 +30,20 @@ interface Props {
   locale: string;
   /** Resolves a duration in working days to the dates it would produce. */
   previewDuration: (workDays: number) => DurationPreview | null;
-  /** Another shortcut pressed in the pop-up — 'd' means the row's description. */
+  /** Resolves an end date (ISO) to the span it would produce. */
+  previewEnd: (end: string) => EndPreview;
+  /** Another shortcut pressed in the pop-up — 'note' means the row's description. */
   onModeChange: (mode: QuickKey) => void;
   onClose: () => void;
   onSaveAssignee: (userId: string | null) => void;
   onSaveDuration: (workDays: number) => void;
+  onSaveEnd: (end: string) => void;
 }
 
-// One pop-up in the middle of the screen, two panes. The same Alt/⌘ shortcuts
+// One pop-up in the middle of the screen, three panes. The same Alt/⌘ shortcuts
 // that open it switch between panes, committing the current one first — so
-// assignee → duration can be filled in one go without touching the mouse.
+// assignee → duration (or end date) can be filled in one go without touching
+// the mouse.
 export function QuickEditPopover(props: Props) {
   const { mode, onClose, onModeChange } = props;
   const t = useT();
@@ -62,8 +69,9 @@ export function QuickEditPopover(props: Props) {
   }
 
   const tabs: { key: QuickPane; icon: React.ReactNode; label: string }[] = [
-    { key: 'a', icon: <User size={12} />, label: t('tasks.quick.assignee') },
-    { key: 't', icon: <Clock size={12} />, label: t('tasks.quick.duration') },
+    { key: 'assign', icon: <User size={12} />, label: t('tasks.quick.assignee') },
+    { key: 'duration', icon: <Clock size={12} />, label: t('tasks.quick.duration') },
+    { key: 'end', icon: <CalendarCheck size={12} />, label: t('tasks.quick.endDate') },
   ];
 
   return (
@@ -83,12 +91,12 @@ export function QuickEditPopover(props: Props) {
         >
           {/* Equal columns that may shrink: icon + label + shortcut on one line
               can be wider than the card, more so in Afrikaans. */}
-          <div className="grid grid-cols-2 gap-1 px-2 pt-2">
+          <div className="grid grid-cols-3 gap-1 px-2 pt-2">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
                 type="button"
-                title={`${tab.label} (${modLabel}+${tab.key.toUpperCase()})`}
+                title={`${tab.label} (${quickLabel(tab.key)})`}
                 onClick={() => switchTo(tab.key)}
                 className={cn(
                   'min-w-0 flex flex-col items-center gap-0.5 px-1 py-1 rounded text-[11px]',
@@ -102,7 +110,7 @@ export function QuickEditPopover(props: Props) {
                   <span className="truncate">{tab.label}</span>
                 </span>
                 <kbd className="text-[9px] leading-none text-neutral-400">
-                  {modLabel}+{tab.key.toUpperCase()}
+                  {quickLabel(tab.key)}
                 </kbd>
               </button>
             ))}
@@ -111,8 +119,9 @@ export function QuickEditPopover(props: Props) {
             {props.item.name}
           </RD.Title>
           <div className="border-t border-neutral-100 dark:border-neutral-800 p-2">
-            {mode === 'a' && <AssigneePane {...props} paneKeys={paneKeys} />}
-            {mode === 't' && <DurationPane {...props} commitRef={commitRef} paneKeys={paneKeys} />}
+            {mode === 'assign' && <AssigneePane {...props} paneKeys={paneKeys} />}
+            {mode === 'duration' && <DurationPane {...props} commitRef={commitRef} paneKeys={paneKeys} />}
+            {mode === 'end' && <EndDatePane {...props} commitRef={commitRef} paneKeys={paneKeys} />}
           </div>
         </RD.Content>
       </RD.Portal>
@@ -284,6 +293,89 @@ function DurationPane({
       </div>
       <div className="mt-0.5 text-[10px] break-words text-neutral-400 dark:text-neutral-500">
         {t('tasks.quick.durationHint')}
+      </div>
+    </div>
+  );
+}
+
+function EndDatePane({
+  item,
+  isParent,
+  locale,
+  previewEnd,
+  onSaveEnd,
+  onClose,
+  paneKeys,
+  commitRef,
+}: PaneProps) {
+  const t = useT();
+  const initial = item.end_date ?? '';
+  const [value, setValue] = useState(initial);
+  const plan = value ? previewEnd(value) : null;
+  const ok = plan && !('error' in plan) ? plan : null;
+
+  const commit = () => {
+    if (isParent || !ok || value === initial) return;
+    onSaveEnd(value);
+  };
+  useLayoutEffect(() => {
+    if (commitRef) commitRef.current = commit;
+  });
+
+  if (isParent) {
+    return (
+      <div className="text-xs text-neutral-500 dark:text-neutral-400" tabIndex={-1}>
+        {t('workItem.dateReason')}
+        {/* Keeps the shortcuts working while this pane has nothing to type into. */}
+        <input autoFocus readOnly onKeyDown={(e) => paneKeys(e)} className="sr-only" aria-hidden />
+      </div>
+    );
+  }
+
+  const fmt = (iso: string) =>
+    parseDate(iso)?.toLocaleDateString(locale, {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+    }) ?? iso;
+
+  return (
+    <div>
+      <input
+        type="date"
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (paneKeys(e)) return;
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            if (value && !ok) return;
+            commit();
+            if (commitRef) commitRef.current = null;
+            onClose();
+          }
+        }}
+        aria-label={t('tasks.quick.endDate')}
+        className={cn(
+          'w-full h-8 rounded border bg-white dark:bg-neutral-950 px-2 text-sm outline-none focus:ring-2',
+          plan && 'error' in plan
+            ? 'border-red-400 focus:ring-red-200 dark:focus:ring-red-900'
+            : 'border-neutral-300 dark:border-neutral-700 focus:ring-neutral-300 dark:focus:ring-neutral-600',
+        )}
+      />
+      <div className="mt-1 text-[11px] min-h-4 break-words">
+        {plan && 'error' in plan ? (
+          <span className="text-red-600 dark:text-red-400">{plan.error}</span>
+        ) : ok ? (
+          <span className="text-neutral-600 dark:text-neutral-300">
+            {t('tasks.quick.durationPreview', { start: fmt(ok.start), end: fmt(ok.end) })}
+            {ok.label && ` · ${ok.label}`}
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-0.5 text-[10px] break-words text-neutral-400 dark:text-neutral-500">
+        {t('tasks.quick.endHint')}
       </div>
     </div>
   );

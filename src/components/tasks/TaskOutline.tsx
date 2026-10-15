@@ -32,7 +32,7 @@ import {
 } from '@/lib/workItemTree';
 import type { Dependency, WorkItem } from '@/types/db';
 import { DraftRow, ItemRow, type DropPos } from './OutlineRow';
-import { QuickEditPopover, type DurationPreview, type QuickPane } from './QuickEditPopover';
+import { QuickEditPopover, type DurationPreview, type EndPreview, type QuickPane } from './QuickEditPopover';
 import { isMultilineDescription } from '@/lib/taskFormat';
 
 export interface OutlineGroup {
@@ -222,7 +222,7 @@ export function TaskOutline(props: Props) {
     setPopup({ id, mode });
   }
 
-  // Alt+D: into the row's own description field. One with line breaks is
+  // Alt+N: into the row's own description field. One with line breaks is
   // edited in the details panel instead, as is one you may only read. The
   // item may not have arrived yet (just created from the draft line);
   // focusKey waits for its row.
@@ -240,7 +240,7 @@ export function TaskOutline(props: Props) {
   }
 
   function openQuick(id: string, mode: QuickKey) {
-    if (mode === 'd') editDescription(id);
+    if (mode === 'note') editDescription(id);
     else openPopup(id, mode);
   }
 
@@ -540,7 +540,7 @@ export function TaskOutline(props: Props) {
     const quick = quickKeyOf(e);
     if (quick) {
       e.preventDefault();
-      if (quick === 'd') editDescription(row.item.id);
+      if (quick === 'note') editDescription(row.item.id);
       else if (g.canEdit) openPopup(row.item.id, quick);
       return;
     }
@@ -744,6 +744,50 @@ export function TaskOutline(props: Props) {
     );
   }
 
+  // The span a new end date makes: the start stays; without one it starts in
+  // the current time filter (or on the end day, if that comes first), never
+  // before what its predecessors allow. An end on a non-working day moves
+  // back to the working day before it.
+  function endPlan(item: WorkItem, g: OutlineGroup, endIso: string): EndPreview {
+    if (!g.calendar) return { error: t('tasks.loadError') };
+    const end = snapIso(endIso, g.calendar, 'backward') ?? endIso;
+    const b = computeSuccessorBinding({
+      successorId: item.id,
+      items: g.items,
+      dependencies: projectDeps(g.projectId),
+      calendar: g.calendar,
+    });
+    const startBinding = b.startBinding ? toDateString(b.startBinding) : null;
+    const endBinding = b.endBinding ? toDateString(b.endBinding) : null;
+    let start = item.start_date;
+    if (!start) {
+      const seed = seedDatesFor(when, today).start_date ?? today;
+      start = snapIso(seed, g.calendar, 'forward') ?? seed;
+      if (start > end) start = end;
+      if (startBinding && startBinding > start) start = startBinding;
+    }
+    // Same guard as the drawer: never hand reschedule_from dates that break an
+    // incoming dependency.
+    if ((startBinding && start < startBinding) || (endBinding && end < endBinding)) {
+      return { error: t('cascade.violatesBinding') };
+    }
+    if (end < start) return { error: t('cascade.endBeforeStart') };
+    return { start, end, label: workItemDurationLabel(start, end, g.calendar) };
+  }
+
+  function saveEnd(item: WorkItem, g: OutlineGroup, endIso: string) {
+    const plan = endPlan(item, g, endIso);
+    if ('error' in plan) {
+      toast.error(plan.error);
+      return;
+    }
+    pin([item.id]);
+    reschedule.mutate(
+      { project_id: item.project_id, work_item_id: item.id, new_start: plan.start, new_end: plan.end },
+      { onError: (e) => toast.error((e as Error).message) },
+    );
+  }
+
   function patch(item: WorkItem, p: Partial<WorkItem>) {
     pin([item.id]);
     update.mutate(
@@ -898,12 +942,13 @@ export function TaskOutline(props: Props) {
           }
           locale={locale}
           previewDuration={(days) => durationPlan(popupTarget.item, popupTarget.g, days)}
+          previewEnd={(end) => endPlan(popupTarget.item, popupTarget.g, end)}
           onModeChange={(mode) => {
-            if (mode !== 'd') {
+            if (mode !== 'note') {
               setPopup({ id: popup.id, mode });
               return;
             }
-            // Alt+D in the pop-up: on to the row's description once it is gone.
+            // Alt+N in the pop-up: on to the row's description once it is gone.
             const id = popup.id;
             setPopup(null);
             requestAnimationFrame(() => editDescription(id));
@@ -911,6 +956,7 @@ export function TaskOutline(props: Props) {
           onClose={closePopup}
           onSaveAssignee={(userId) => patch(popupTarget.item, { assignee_id: userId })}
           onSaveDuration={(days) => saveDuration(popupTarget.item, popupTarget.g, days)}
+          onSaveEnd={(end) => saveEnd(popupTarget.item, popupTarget.g, end)}
         />
       )}
     </>

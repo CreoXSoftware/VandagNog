@@ -341,6 +341,8 @@ export const af: Dict = {
     quick: {
       assignee: 'Toewys',
       duration: 'Duur',
+      endDate: 'Einddatum',
+      endHint: '’n Nie-werksdag skuif terug na die werksdag daarvoor. Enter stoor · Esc kanselleer',
       assigneeSearch: 'Soek mense…',
       noMatches: 'Niemand pas nie.',
       assigneeHint: '↑ ↓ om te kies · Enter wys toe · Esc kanselleer',
@@ -857,7 +859,7 @@ export const af: Dict = {
     button: 'Hulp en kortpaaie',
     tooltip: 'Wenke en kortpaaie vir {page}',
     title: 'Hulp — {page}',
-    macNote: 'Op ’n Mac werk ⌥ (Option) ook in plaas van ⌘ — gebruik ⌥T vir duur, want Chrome hou ⌘T vir nuwe oortjies.',
+    macNote: 'Op ’n Mac werk ⌥ (Option) ook in plaas van ⌘ — gebruik ⌥N en ⌥L, want Chrome hou ⌘N vir nuwe vensters en ⌘L vir die adresbalk.',
     general: {
       name: 'hierdie bladsy',
       intro: 'VandagNog beplan projekte as taakbome op ’n gantt-grafiek en bring jou werk op die Take-bladsy bymekaar.',
@@ -881,7 +883,8 @@ export const af: Dict = {
       kDesc: 'Wysig die beskrywing, langs die naam',
       kAssign: 'Wys toe aan iemand in die projek',
       kDuration: 'Duur in werksdae — 3, 3d of 2w',
-      quickNote: 'Toewys en Duur maak ’n opspringer in die middel van die skerm oop: Enter stoor, en dieselfde kortpaaie spring tussen sy velde en stoor terwyl dit gaan. Esc maak toe sonder om te stoor.',
+      kEnd: 'Einddatum — die begindatum bly waar dit is',
+      quickNote: 'Toewys, Duur en Einddatum maak ’n opspringer in die middel van die skerm oop: Enter stoor, en dieselfde kortpaaie spring tussen sy velde en stoor terwyl dit gaan. Esc maak toe sonder om te stoor.',
       organiseTitle: 'Organiseer',
       rename: 'Klik op ’n taaknaam om dit te wysig. Dit stoor wanneer jy die veld verlaat.',
       drag: 'Sleep ’n taak aan sy ⋮⋮-handvatsel: los dit op die boonste of onderste rand van ’n ander taak om dit voor of ná te plaas, of in die middel om dit ’n subtaak te maak.',

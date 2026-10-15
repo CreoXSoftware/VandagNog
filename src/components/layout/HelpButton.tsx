@@ -5,7 +5,7 @@ import { Dialog, DialogContent } from '@/components/ui/Dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/Tooltip';
 import { useHelp } from '@/lib/helpStore';
 import { useT, type TKey } from '@/lib/i18n';
-import { isMac, modLabel } from '@/lib/platform';
+import { isMac, modLabel, QUICK_KEYS } from '@/lib/platform';
 
 type PageKey =
   | 'tasks'
@@ -66,9 +66,10 @@ const PAGES: Record<PageKey, { name: TKey; intro: TKey; sections: HelpSection[] 
       {
         title: 'help.tasks.quickTitle',
         items: [
-          { keys: [[MOD, 'D']], label: 'help.tasks.kDesc' },
-          { keys: [[MOD, 'A']], label: 'help.tasks.kAssign' },
-          { keys: [[MOD, 'T']], label: 'help.tasks.kDuration' },
+          { keys: [[MOD, QUICK_KEYS.note]], label: 'help.tasks.kDesc' },
+          { keys: [[MOD, QUICK_KEYS.assign]], label: 'help.tasks.kAssign' },
+          { keys: [[MOD, QUICK_KEYS.duration]], label: 'help.tasks.kDuration' },
+          { keys: [[MOD, QUICK_KEYS.end]], label: 'help.tasks.kEnd' },
           { text: 'help.tasks.quickNote' },
           ...(isMac ? [{ text: 'help.macNote' as TKey }] : []),
         ],

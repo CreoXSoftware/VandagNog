@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, GripVertical, ListTree, Trash2 } from 'lucid
 import { Avatar } from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
-import { modLabel, quickKeyOf, type QuickKey } from '@/lib/platform';
+import { quickKeyOf, quickLabel, type QuickKey } from '@/lib/platform';
 import { formatRange, isMultilineDescription } from '@/lib/taskFormat';
 import type { OutlineRow } from '@/lib/taskOutline';
 import type { TasksPerson } from '@/hooks/useTasksData';
@@ -113,7 +113,7 @@ export function ItemRow({
     setDescSynced(descShown);
     setDesc(descShown);
   }
-  // Hidden (but still there for Alt+D to focus) when switched off or empty.
+  // Hidden (but still there for Alt+N to focus) when switched off or empty.
   const descVisible = descEditing || (showDescription && !!descShown);
   const descPlaceholder = t('tasks.outline.descriptionPlaceholder');
   const descTitle = item.description
@@ -322,9 +322,9 @@ export function ItemRow({
                 backToName();
                 return;
               }
-              // Alt+A / Alt+T and moving between tasks work from here too.
+              // Assign, duration and end date, and moving between tasks, work from here too.
               const quick = quickKeyOf(e);
-              if (quick === 'd') {
+              if (quick === 'note') {
                 e.preventDefault();
                 return;
               }
@@ -365,12 +365,12 @@ export function ItemRow({
         type="button"
         data-drawer-close
         tabIndex={-1}
-        onClick={() => onQuick('t')}
+        onClick={() => onQuick('duration')}
         disabled={!canEdit || isParent}
         title={
           isParent
             ? t('workItem.dateReason')
-            : `${durationLabel ? `${durationLabel} · ` : ''}${t('tasks.quick.duration')} (${modLabel}+T)`
+            : `${durationLabel ? `${durationLabel} · ` : ''}${t('tasks.quick.duration')} (${quickLabel('duration')}) · ${t('tasks.quick.endDate')} (${quickLabel('end')})`
         }
         className={cn(
           'shrink-0 text-[11px] tabular-nums rounded px-1 enabled:hover:bg-neutral-200 dark:enabled:hover:bg-neutral-700',
@@ -386,12 +386,12 @@ export function ItemRow({
         type="button"
         data-drawer-close
         tabIndex={-1}
-        onClick={() => onQuick('a')}
+        onClick={() => onQuick('assign')}
         disabled={!canEdit}
         title={
           assignee
-            ? `${assignee.display_name} · ${t('tasks.quick.assignee')} (${modLabel}+A)`
-            : `${t('tasks.unassigned')} · ${t('tasks.quick.assignee')} (${modLabel}+A)`
+            ? `${assignee.display_name} · ${t('tasks.quick.assignee')} (${quickLabel('assign')})`
+            : `${t('tasks.unassigned')} · ${t('tasks.quick.assignee')} (${quickLabel('assign')})`
         }
         className="shrink-0 rounded-full disabled:cursor-default"
       >
