@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useRouterState } from '@tanstack/react-router';
 import { ChevronDown, ChevronRight, Download, Filter as FilterIcon } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
@@ -45,13 +45,52 @@ function defaultFilters(): Filters {
   };
 }
 
+// The filters survive navigating away and back. sessionStorage rather than the
+// localStorage the other pages use: the default range is "this month", and a
+// remembered range coming back days or weeks later would silently report on a
+// stale period.
+const FILTERS_KEY = 'vn.trackerReports.filters';
+const TASK_MODES: TaskMode[] = ['all', 'noTask', 'workItem', 'custom'];
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+function loadFilters(): Filters {
+  const d = defaultFilters();
+  try {
+    const raw = sessionStorage.getItem(FILTERS_KEY);
+    if (!raw) return d;
+    const p = JSON.parse(raw) as Record<string, unknown>;
+    const str = (v: unknown, fallback: string) => (typeof v === 'string' ? v : fallback);
+    const since = str(p.since, d.since);
+    const until = str(p.until, d.until);
+    return {
+      since: ISO_DAY.test(since) ? since : d.since,
+      until: ISO_DAY.test(until) ? until : d.until,
+      user_id: str(p.user_id, ''),
+      client_id: str(p.client_id, ''),
+      project_id: str(p.project_id, ''),
+      work_item_id: str(p.work_item_id, ''),
+      task_mode: TASK_MODES.includes(p.task_mode as TaskMode) ? (p.task_mode as TaskMode) : 'all',
+      custom_query: str(p.custom_query, ''),
+    };
+  } catch {
+    return d;
+  }
+}
+
 export function TrackerReportsPage() {
   const t = useT();
   const path = useRouterState({ select: (s) => s.location.pathname });
   const onReports = path.startsWith('/tracker/reports');
 
-  const [filters, setFilters] = useState<Filters>(defaultFilters);
+  const [filters, setFilters] = useState<Filters>(loadFilters);
   const patch = (p: Partial<Filters>) => setFilters((f) => ({ ...f, ...p }));
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(FILTERS_KEY, JSON.stringify(filters));
+    } catch {
+      // Storage unavailable — the page still works, it just won't remember.
+    }
+  }, [filters]);
 
   // Server-side date range. RLS limits to projects I'm a member of.
   const sinceIso = useMemo(() => new Date(filters.since + 'T00:00:00').toISOString(), [filters.since]);

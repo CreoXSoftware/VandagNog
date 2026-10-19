@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import * as Popover from '@radix-ui/react-popover';
-import { Filter, X, User as UserIcon, CircleDot, CalendarRange, Layers } from 'lucide-react';
+import { Filter, X, User as UserIcon, CircleDot, CalendarRange, Layers, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
 import { displayName } from '@/lib/userDisplay';
@@ -20,6 +20,8 @@ interface Props {
   members: ProjectMember[];
   workItems: WorkItem[];
   currentUserId: string | null;
+  /** Enter in the search box: jump to the first match. */
+  onSubmitSearch?: () => void;
 }
 
 const STATUS_KEYS: StatusFilter[] = ['not_started', 'in_progress', 'completed', 'overdue'];
@@ -31,7 +33,7 @@ const STATUS_DOT: Record<StatusFilter, string> = {
   overdue: 'bg-red-500',
 };
 
-export function GanttFilters({ filter, setFilter, members, workItems, currentUserId }: Props) {
+export function GanttFilters({ filter, setFilter, members, workItems, currentUserId, onSubmitSearch }: Props) {
   const t = useT();
 
   const maxDepth = useMemo(() => {
@@ -59,6 +61,36 @@ export function GanttFilters({ filter, setFilter, members, workItems, currentUse
 
   return (
     <div className="flex items-center gap-1 flex-wrap">
+      {/* Task search: narrows the chart to matching names (their parents stay, dimmed). */}
+      <div className="relative mr-1">
+        <Search
+          size={11}
+          className="absolute left-1.5 top-1/2 -translate-y-1/2 text-neutral-400 dark:text-neutral-500 pointer-events-none"
+        />
+        <input
+          value={filter.search}
+          onChange={(e) => setFilter({ ...filter, search: e.target.value })}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              onSubmitSearch?.();
+            } else if (e.key === 'Escape' && filter.search) {
+              e.preventDefault();
+              setFilter({ ...filter, search: '' });
+            }
+          }}
+          placeholder={t('gantt.filter.search')}
+          aria-label={t('gantt.filter.search')}
+          title={t('gantt.filter.searchHint')}
+          className={cn(
+            'h-6 w-40 pl-6 pr-2 rounded border text-[11px] bg-white dark:bg-neutral-950',
+            filter.search.trim()
+              ? 'border-blue-400 dark:border-blue-600'
+              : 'border-neutral-300 dark:border-neutral-700',
+          )}
+        />
+      </div>
+
       <Filter size={12} className="text-neutral-500 dark:text-neutral-400" />
 
       {/* Assignee */}

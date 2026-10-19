@@ -25,6 +25,9 @@ import type { TrackerTarget } from '@/types/db';
 interface Props {
   target: TrackerTarget | null;
   setTarget: (t: TrackerTarget | null) => void;
+  /** The note, shared with the live timer so switching keeps it. */
+  notes: string;
+  setNotes: (v: string) => void;
   /** Rendered as the card's first row (the Live / Manual switch). */
   header?: React.ReactNode;
 }
@@ -34,7 +37,7 @@ type EndMode = 'end' | 'duration';
 
 const END_MODE_KEY = 'vn.tracker.manual.endMode';
 
-export function ManualEntryForm({ target, setTarget, header }: Props) {
+export function ManualEntryForm({ target, setTarget, notes, setNotes, header }: Props) {
   const t = useT();
   const create = useCreateManualEntry();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -44,7 +47,6 @@ export function ManualEntryForm({ target, setTarget, header }: Props) {
   const [end, setEnd] = useState<string>(() => isoTime(new Date()));
   const [endMode, setEndModeState] = useState<EndMode>(readEndMode);
   const [durationText, setDurationText] = useState('1:00');
-  const [notes, setNotes] = useState('');
 
   // 22:30 – 03:30 is an overnight session: the end falls on the next day. A
   // duration can run past midnight just the same.

@@ -1,7 +1,9 @@
 import { addWorkingDays, diffDays, parseDate, toDateString, workingDayHops, type WorkCalendar } from '@/components/gantt/ganttUtils';
 import type { Dependency, DependencyType, WorkItem } from '@/types/db';
 
-export type WorkItemPatch = Partial<Pick<WorkItem, 'start_date' | 'end_date' | 'progress' | 'duration_days'>>;
+export type WorkItemPatch = Partial<
+  Pick<WorkItem, 'start_date' | 'end_date' | 'progress' | 'duration_days' | 'planned_start' | 'planned_end'>
+>;
 
 export interface CascadeResult {
   patches: Map<string, WorkItemPatch>;
@@ -178,11 +180,6 @@ export function computeCascade({
   const effective = new Map<string, WorkItem>(items.map((i) => [i.id, i]));
   const patches = new Map<string, WorkItemPatch>();
 
-  function isLeaf(id: string): boolean {
-    const kids = byParent.get(id);
-    return !kids || kids.length === 0;
-  }
-
   function applyPatch(id: string, patch: WorkItemPatch): boolean {
     const cur = effective.get(id)!;
     const next = { ...cur, ...patch };
@@ -190,7 +187,9 @@ export function computeCascade({
       next.start_date === cur.start_date &&
       next.end_date === cur.end_date &&
       next.progress === cur.progress &&
-      next.duration_days === cur.duration_days
+      next.duration_days === cur.duration_days &&
+      next.planned_start === cur.planned_start &&
+      next.planned_end === cur.planned_end
     ) {
       return false;
     }
@@ -199,14 +198,20 @@ export function computeCascade({
     return true;
   }
 
-  function refreshParent(parentId: string): boolean {
-    const childIds = byParent.get(parentId) ?? [];
-    if (childIds.length === 0) return false;
-    const children = childIds
+  function liveChildren(parentId: string): WorkItem[] {
+    return (byParent.get(parentId) ?? [])
       .map((id) => effective.get(id))
       .filter((c): c is WorkItem => Boolean(c) && !c!.deleted_at);
+  }
+
+  function refreshParent(parentId: string): boolean {
+    // A live child can point at a parent that isn't in this list (deleted, or
+    // not loaded); there is no row to roll up into.
+    const parent = effective.get(parentId);
+    if (!parent) return false;
+    const children = liveChildren(parentId);
     if (children.length === 0) return false;
-    const rolled = computeRollup(children);
+    const rolled = computeRollup(parent, children);
     return applyPatch(parentId, rolled);
   }
 
@@ -219,17 +224,25 @@ export function computeCascade({
     }
   }
 
-  // Descend through nested summaries to the leaf that drives the rolled edge
-  // for the given side: min-start leaf for 'start', max-end leaf for 'end'.
-  // Ties broken by id asc (matches server).
-  function gatingLeafFor(parentId: string, side: 'start' | 'end'): string | null {
-    let cur = parentId;
+  // Descend through nested summaries to what drives the rolled edge for the
+  // given side: a leaf (min-start for 'start', max-end for 'end'), or a parent
+  // whose committed edge is (or ties) that edge, in which case its committed
+  // window is what moves. Ties broken by id asc (matches server).
+  function gatingTargetFor(rootId: string, side: 'start' | 'end'): { id: string; planned: boolean } {
+    let cur = rootId;
     while (true) {
-      const childIds = byParent.get(cur) ?? [];
-      const kids = childIds
-        .map((id) => effective.get(id))
-        .filter((c): c is WorkItem => Boolean(c) && !c!.deleted_at);
-      if (kids.length === 0) return cur === parentId ? null : cur;
+      const kids = liveChildren(cur);
+      if (kids.length === 0) return { id: cur, planned: false };
+      const node = effective.get(cur);
+      if (!node) return { id: cur, planned: false };
+      if (side === 'start' && node.planned_start) {
+        const kidEdge = minDate(kids.map((k) => k.start_date));
+        if (!kidEdge || node.planned_start <= kidEdge) return { id: cur, planned: true };
+      }
+      if (side === 'end' && node.planned_end) {
+        const kidEdge = maxDate(kids.map((k) => k.end_date));
+        if (!kidEdge || node.planned_end >= kidEdge) return { id: cur, planned: true };
+      }
       let best = kids[0];
       for (const k of kids) {
         if (side === 'start') {
@@ -290,20 +303,36 @@ export function computeCascade({
       }
       const side: 'start' | 'end' = startShift >= endShift ? 'start' : 'end';
 
-      const targetId = isLeaf(succId) ? succId : gatingLeafFor(succId, side);
-      if (!targetId) return anyChange;
+      const { id: targetId, planned } = gatingTargetFor(succId, side);
       const target = effective.get(targetId)!;
-      const tStart = parseDate(target.start_date);
-      const tEnd = parseDate(target.end_date);
-      if (!tStart || !tEnd) return anyChange;
-
-      const newTStart = addWorkingDays(tStart, shift, calendar);
-      const newTEnd = addWorkingDays(tEnd, shift, calendar);
-      const changed = applyPatch(targetId, {
-        start_date: toDateString(newTStart),
-        end_date: toDateString(newTEnd),
-        duration_days: null,
-      });
+      let changed: boolean;
+      if (planned) {
+        // Shift the committed window (span kept), then re-envelope the parent.
+        const ps = parseDate(target.planned_start);
+        const pe = parseDate(target.planned_end);
+        if (!ps || !pe) return anyChange;
+        const shifted = {
+          ...target,
+          planned_start: toDateString(addWorkingDays(ps, shift, calendar)),
+          planned_end: toDateString(addWorkingDays(pe, shift, calendar)),
+        };
+        const rolled = computeRollup(shifted, liveChildren(targetId));
+        changed = applyPatch(targetId, {
+          planned_start: shifted.planned_start,
+          planned_end: shifted.planned_end,
+          start_date: rolled.start_date,
+          end_date: rolled.end_date,
+        });
+      } else {
+        const tStart = parseDate(target.start_date);
+        const tEnd = parseDate(target.end_date);
+        if (!tStart || !tEnd) return anyChange;
+        changed = applyPatch(targetId, {
+          start_date: toDateString(addWorkingDays(tStart, shift, calendar)),
+          end_date: toDateString(addWorkingDays(tEnd, shift, calendar)),
+          duration_days: null,
+        });
+      }
       if (!changed) return anyChange;
       anyChange = true;
       queue.push(targetId);
@@ -343,15 +372,41 @@ export function computeCascade({
   return { patches, error: null };
 }
 
-function computeRollup(children: WorkItem[]): { start_date: string | null; end_date: string | null; progress: number } {
-  let minStart: string | null = null;
-  let maxEnd: string | null = null;
+function minDate(dates: (string | null)[]): string | null {
+  let out: string | null = null;
+  for (const d of dates) if (d && (!out || d < out)) out = d;
+  return out;
+}
+
+function maxDate(dates: (string | null)[]): string | null {
+  let out: string | null = null;
+  for (const d of dates) if (d && (!out || d > out)) out = d;
+  return out;
+}
+
+// Effective dates of a parent: the envelope of its committed range and its
+// live children (mirrors server rollup_parent_once). Exported for callers that
+// change a committed range and need the resulting dates.
+export function rollupDates(
+  parent: Pick<WorkItem, 'planned_start' | 'planned_end'>,
+  children: WorkItem[],
+): { start_date: string | null; end_date: string | null } {
+  const live = children.filter((c) => !c.deleted_at);
+  return {
+    start_date: minDate([parent.planned_start, ...live.map((c) => c.start_date)]),
+    end_date: maxDate([parent.planned_end, ...live.map((c) => c.end_date)]),
+  };
+}
+
+function computeRollup(
+  parent: Pick<WorkItem, 'planned_start' | 'planned_end'>,
+  children: WorkItem[],
+): { start_date: string | null; end_date: string | null; progress: number } {
+  const { start_date: minStart, end_date: maxEnd } = rollupDates(parent, children);
   let sumWeight = 0;
   let sumWeightedProgress = 0;
   for (const c of children) {
     if (c.deleted_at) continue;
-    if (c.start_date && (!minStart || c.start_date < minStart)) minStart = c.start_date;
-    if (c.end_date && (!maxEnd || c.end_date > maxEnd)) maxEnd = c.end_date;
     let weight: number;
     if (c.start_date && c.end_date) {
       const ds = parseDate(c.start_date);

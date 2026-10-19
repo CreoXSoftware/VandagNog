@@ -7,6 +7,7 @@ import { ManualEntryForm } from '@/components/tracker/ManualEntryForm';
 import { SessionList } from '@/components/tracker/SessionList';
 import { TimeImportDialog } from '@/components/tracker/TimeImportDialog';
 import { Button } from '@/components/ui/Button';
+import { useActiveTimer } from '@/hooks/useTimeEntries';
 import { cn } from '@/lib/utils';
 import type { TrackerTarget } from '@/types/db';
 
@@ -18,9 +19,24 @@ export function TrackerPage() {
   const onReports = path.startsWith('/tracker/reports');
 
   const [mode, setMode] = useState<Mode>('live');
-  // Shared target between live + manual so toggling preserves selection.
+  // Shared between live + manual so toggling keeps the target and the note.
   const [target, setTarget] = useState<TrackerTarget | null>(null);
+  const [notes, setNotes] = useState('');
   const [importOpen, setImportOpen] = useState(false);
+
+  // In Live mode the note box is the running entry's note: it takes that note
+  // when a timer starts (or when you come to Live while one runs), and empties
+  // when the timer stops. Manual mode leaves it alone. Adjusted during render
+  // when the entry changes, so typing isn't overwritten by refetches.
+  const { data: active } = useActiveTimer();
+  const liveEntry = mode === 'live' ? (active?.id ?? null) : undefined;
+  // Starts unsynced, so arriving with a timer already running shows its note.
+  const [syncedEntry, setSyncedEntry] = useState<string | null | undefined>(undefined);
+  if (liveEntry !== syncedEntry) {
+    setSyncedEntry(liveEntry);
+    if (active && liveEntry) setNotes(active.notes ?? '');
+    else if (liveEntry === null && syncedEntry) setNotes('');
+  }
 
   return (
     <div className="h-full overflow-y-auto">
@@ -42,9 +58,9 @@ export function TrackerPage() {
 
         {/* The Live / Manual switch is the first row inside whichever card shows. */}
         {mode === 'live' ? (
-          <LiveTimerCard target={target} setTarget={setTarget} header={<ModeSwitch mode={mode} setMode={setMode} />} />
+          <LiveTimerCard target={target} setTarget={setTarget} notes={notes} setNotes={setNotes} header={<ModeSwitch mode={mode} setMode={setMode} />} />
         ) : (
-          <ManualEntryForm target={target} setTarget={setTarget} header={<ModeSwitch mode={mode} setMode={setMode} />} />
+          <ManualEntryForm target={target} setTarget={setTarget} notes={notes} setNotes={setNotes} header={<ModeSwitch mode={mode} setMode={setMode} />} />
         )}
 
         <div className="pt-2">

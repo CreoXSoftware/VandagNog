@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import type { Dependency, NonWorkingDay, Project, WorkItem } from '@/types/db';
-import { computeCascade } from '@/lib/cascade';
+import { computeCascade, rollupDates } from '@/lib/cascade';
 import { buildCalendar } from '@/components/gantt/ganttUtils';
 import { markLocalWorkItemMutation } from '@/lib/localMutationGuard';
 import { dependenciesKey } from './useDependencies';
@@ -75,8 +75,23 @@ export interface CreateWorkItemInput {
   progress?: number;
   position?: number;
   // Must be a member of the project — the enforce_assignee_membership trigger
-  // rejects anyone else.
+  // rejects anyone else. Left undefined, a sub-task takes its parent's assignee.
   assignee_id?: string | null;
+}
+
+// The parent's assignee from whichever cache holds the parent: null when it is
+// unassigned, undefined when the parent isn't cached (e.g. created a moment
+// ago by the same quick-add batch).
+function cachedParentAssignee(
+  qc: ReturnType<typeof useQueryClient>,
+  input: CreateWorkItemInput,
+): string | null | undefined {
+  if (!input.parent_id) return null;
+  const find = (items: WorkItem[] | undefined) => items?.find((w) => w.id === input.parent_id);
+  const parent =
+    find(qc.getQueryData<WorkItem[]>(workItemsKey(input.project_id))) ??
+    find(findTasksData(qc, input.project_id)?.items);
+  return parent ? parent.assignee_id : undefined;
 }
 
 export function useCreateWorkItem() {
@@ -86,25 +101,47 @@ export function useCreateWorkItem() {
       const { data: userRes } = await supabase.auth.getUser();
       const userId = userRes.user?.id;
       if (!userId) throw new Error('Not authenticated');
-      const { data, error } = await supabase
-        .from('work_items')
-        .insert({
-          ...(input.id ? { id: input.id } : {}),
-          project_id: input.project_id,
-          parent_id: input.parent_id,
-          name: input.name,
-          description: input.description ?? null,
-          deliverable: input.deliverable ?? null,
-          start_date: input.start_date ?? null,
-          end_date: input.end_date ?? null,
-          duration_days: input.duration_days ?? null,
-          progress: input.progress ?? 0,
-          position: input.position ?? 0,
-          assignee_id: input.assignee_id ?? null,
-          created_by: userId,
-        })
-        .select()
-        .single();
+
+      // A sub-task starts on its parent's assignee unless the caller chose one.
+      let assignee = input.assignee_id;
+      const inherited = assignee === undefined && !!input.parent_id;
+      if (inherited) {
+        assignee = cachedParentAssignee(qc, input);
+        if (assignee === undefined) {
+          const { data: parent } = await supabase
+            .from('work_items')
+            .select('assignee_id')
+            .eq('id', input.parent_id!)
+            .maybeSingle();
+          assignee = (parent?.assignee_id as string | null | undefined) ?? null;
+        }
+      }
+
+      const insert = (assignee_id: string | null) =>
+        supabase
+          .from('work_items')
+          .insert({
+            ...(input.id ? { id: input.id } : {}),
+            project_id: input.project_id,
+            parent_id: input.parent_id,
+            name: input.name,
+            description: input.description ?? null,
+            deliverable: input.deliverable ?? null,
+            start_date: input.start_date ?? null,
+            end_date: input.end_date ?? null,
+            duration_days: input.duration_days ?? null,
+            progress: input.progress ?? 0,
+            position: input.position ?? 0,
+            assignee_id,
+            created_by: userId,
+          })
+          .select()
+          .single();
+
+      let { data, error } = await insert(assignee ?? null);
+      // An inherited assignee may since have left the project, which
+      // enforce_assignee_membership rejects; the sub-task is still wanted.
+      if (error && inherited && assignee) ({ data, error } = await insert(null));
       if (error) throw error;
       return data as WorkItem;
     },
@@ -115,9 +152,14 @@ export function useCreateWorkItem() {
       if (!input.id) return { prevTasks: undefined };
       markLocalWorkItemMutation();
       await qc.cancelQueries({ queryKey: tasksDataKey });
+      const assignee =
+        input.assignee_id !== undefined ? input.assignee_id : (cachedParentAssignee(qc, input) ?? null);
       const prevTasks = patchTasksCache(qc, (items) => {
         const parent = input.parent_id ? items.find((w) => w.id === input.parent_id) : undefined;
-        return [...items, provisionalWorkItem(input, input.id!, parent ? parent.level + 1 : 0)];
+        return [
+          ...items,
+          provisionalWorkItem({ ...input, assignee_id: assignee }, input.id!, parent ? parent.level + 1 : 0),
+        ];
       });
       return { prevTasks };
     },
@@ -145,6 +187,8 @@ function provisionalWorkItem(input: CreateWorkItemInput, id: string, level: numb
     start_date: input.start_date ?? null,
     end_date: input.end_date ?? null,
     duration_days: input.duration_days ?? null,
+    planned_start: null,
+    planned_end: null,
     progress: input.progress ?? 0,
     assignee_id: input.assignee_id ?? null,
     position: input.position ?? 0,
@@ -287,6 +331,37 @@ export function useRestoreWorkItem() {
   });
 }
 
+// Everything an optimistic cascade needs for one project, after cancelling
+// in-flight refetches that would overwrite it.
+async function cascadeContext(qc: ReturnType<typeof useQueryClient>, projectId: string) {
+  markLocalWorkItemMutation();
+  await Promise.all([
+    qc.cancelQueries({ queryKey: workItemsKey(projectId) }),
+    qc.cancelQueries({ queryKey: dependenciesKey(projectId) }),
+    qc.cancelQueries({ queryKey: tasksDataKey }),
+  ]);
+  const prev = qc.getQueryData<WorkItem[]>(workItemsKey(projectId));
+  const prevDeps = qc.getQueryData<Dependency[]>(dependenciesKey(projectId));
+  const tasks = findTasksData(qc, projectId);
+
+  // The project caches are cold when this runs from the global Tasks page
+  // without the drawer open. The Tasks dataset carries the same rows, edges
+  // and calendar for every project, so the cascade runs from it instead —
+  // otherwise the new dates would not show until something refetched,
+  // because these mutations deliberately never invalidate.
+  const items = prev ?? tasks?.items.filter((w) => w.project_id === projectId);
+  const dependencies =
+    prevDeps ?? tasks?.dependencies.filter((d) => d.project_id === projectId) ?? [];
+
+  const project = qc.getQueryData<Project>(projectKey(projectId));
+  const nonWorking = qc.getQueryData<NonWorkingDay[]>(nonWorkingDaysKey(projectId));
+  const calendar =
+    (!project || !nonWorking ? tasks?.calendarByProject.get(projectId) : undefined) ??
+    buildCalendar(project?.working_days ?? [1, 2, 3, 4, 5], nonWorking ?? []);
+
+  return { prev, prevDeps, items, dependencies, calendar };
+}
+
 export function useRescheduleFrom() {
   const qc = useQueryClient();
   return useMutation({
@@ -299,31 +374,8 @@ export function useRescheduleFrom() {
       if (error) throw error;
     },
     onMutate: async (input) => {
-      markLocalWorkItemMutation();
-      await Promise.all([
-        qc.cancelQueries({ queryKey: workItemsKey(input.project_id) }),
-        qc.cancelQueries({ queryKey: dependenciesKey(input.project_id) }),
-        qc.cancelQueries({ queryKey: tasksDataKey }),
-      ]);
-      const prev = qc.getQueryData<WorkItem[]>(workItemsKey(input.project_id));
-      const prevDeps = qc.getQueryData<Dependency[]>(dependenciesKey(input.project_id));
-      const tasks = findTasksData(qc, input.project_id);
-
-      // The project caches are cold when this runs from the global Tasks page
-      // without the drawer open. The Tasks dataset carries the same rows, edges
-      // and calendar for every project, so the cascade runs from it instead —
-      // otherwise the new dates would not show until something refetched,
-      // because this mutation deliberately never invalidates.
-      const items = prev ?? tasks?.items.filter((w) => w.project_id === input.project_id);
+      const { prev, prevDeps, items, dependencies, calendar } = await cascadeContext(qc, input.project_id);
       if (!items) return { prev, prevDeps, prevTasks: undefined };
-      const dependencies =
-        prevDeps ?? tasks?.dependencies.filter((d) => d.project_id === input.project_id) ?? [];
-
-      const project = qc.getQueryData<Project>(projectKey(input.project_id));
-      const nonWorking = qc.getQueryData<NonWorkingDay[]>(nonWorkingDaysKey(input.project_id));
-      const calendar =
-        (!project || !nonWorking ? tasks?.calendarByProject.get(input.project_id) : undefined) ??
-        buildCalendar(project?.working_days ?? [1, 2, 3, 4, 5], nonWorking ?? []);
 
       const result = computeCascade({
         rootId: input.work_item_id,
@@ -356,5 +408,75 @@ export function useRescheduleFrom() {
       markLocalWorkItemMutation();
     },
     // No onSettled invalidate — optimistic cascade + lag IS authoritative; matches server exactly.
+  });
+}
+
+// Commit a parent to a date range, or clear it (null/null) so it fits its
+// sub-tasks again. The parent's dates become the envelope of the range and its
+// children, and successors cascade off them exactly like a date edit.
+export function useSetPlannedRange() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      project_id: string;
+      work_item_id: string;
+      planned_start: string | null;
+      planned_end: string | null;
+    }) => {
+      const { error } = await supabase.rpc('set_planned_range', {
+        p_work_item_id: input.work_item_id,
+        p_start: input.planned_start,
+        p_end: input.planned_end,
+      });
+      if (error) throw error;
+    },
+    onMutate: async (input) => {
+      const { prev, prevDeps, items, dependencies, calendar } = await cascadeContext(qc, input.project_id);
+      if (!items) return { prev, prevDeps, prevTasks: undefined };
+
+      const range = { planned_start: input.planned_start, planned_end: input.planned_end };
+      const withRange = items.map((w) => (w.id === input.work_item_id ? { ...w, ...range } : w));
+      const { start_date, end_date } = rollupDates(
+        range,
+        withRange.filter((w) => w.parent_id === input.work_item_id),
+      );
+      const patches = new Map<string, Partial<WorkItem>>();
+      // Server: set_planned_range only runs reschedule_from when both dates exist.
+      if (start_date && end_date) {
+        const result = computeCascade({
+          rootId: input.work_item_id,
+          newStart: start_date,
+          newEnd: end_date,
+          items: withRange,
+          dependencies,
+          calendar,
+        });
+        for (const [id, p] of result.patches) patches.set(id, p);
+      }
+      patches.set(input.work_item_id, {
+        ...(patches.get(input.work_item_id) ?? {}),
+        ...range,
+        start_date,
+        end_date,
+      });
+
+      const apply = (wi: WorkItem) => {
+        const p = patches.get(wi.id);
+        return p ? ({ ...wi, ...p } as WorkItem) : wi;
+      };
+      if (prev) qc.setQueryData<WorkItem[]>(workItemsKey(input.project_id), prev.map(apply));
+      const prevTasks = patchTasksCache(qc, (items) => items.map(apply));
+
+      return { prev, prevDeps, prevTasks };
+    },
+    onError: (_e, input, ctx) => {
+      if (ctx?.prev) qc.setQueryData(workItemsKey(input.project_id), ctx.prev);
+      if (ctx?.prevDeps) qc.setQueryData(dependenciesKey(input.project_id), ctx.prevDeps);
+      restoreTasksCache(qc, ctx?.prevTasks);
+    },
+    onSuccess: () => {
+      markLocalWorkItemMutation();
+    },
+    // Like useRescheduleFrom: the optimistic cascade mirrors the server, so no invalidate.
   });
 }

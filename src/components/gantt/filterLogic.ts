@@ -11,6 +11,7 @@ export interface GanttFilterState {
   dateTo: string | null;
   maxDepth: number | null; // null = no limit, else show items with level <= maxDepth
   me: MeFilter; // null = no shortcut
+  search: string; // name contains, case-insensitive; '' = off
 }
 
 export const EMPTY_FILTER: GanttFilterState = {
@@ -20,6 +21,7 @@ export const EMPTY_FILTER: GanttFilterState = {
   dateTo: null,
   maxDepth: null,
   me: null,
+  search: '',
 };
 
 export function isFilterActive(f: GanttFilterState): boolean {
@@ -29,7 +31,8 @@ export function isFilterActive(f: GanttFilterState): boolean {
     f.dateFrom !== null ||
     f.dateTo !== null ||
     f.maxDepth !== null ||
-    f.me !== null
+    f.me !== null ||
+    f.search.trim() !== ''
   );
 }
 
@@ -59,12 +62,15 @@ export function matchedIds({ items, filter, currentUserId }: MatchArgs): Set<str
   const today = toDateString(new Date());
   const assigneeSet = new Set(filter.assignees);
   const statusSet = new Set(filter.statuses);
+  const q = filter.search.trim().toLowerCase();
   const out = new Set<string>();
 
   for (const it of items) {
     if (it.deleted_at) continue;
 
     if (filter.maxDepth !== null && it.level > filter.maxDepth) continue;
+
+    if (q && !it.name.toLowerCase().includes(q)) continue;
 
     if (assigneeSet.size > 0) {
       const key = it.assignee_id ?? 'unassigned';

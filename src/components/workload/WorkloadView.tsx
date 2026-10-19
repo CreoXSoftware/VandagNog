@@ -28,6 +28,8 @@ interface Props {
   rows: WorkloadRow[];
   calendar: WorkCalendar;
   projectNameById: Map<string, string>;
+  /** Parent names per task, outermost first (see useWorkloadData). */
+  ancestorNamesById: Map<string, string[]>;
 }
 
 const PEOPLE_W = 240;
@@ -81,7 +83,7 @@ function barColor(item: WorkItem, today: string): string {
   return 'bg-neutral-400 hover:bg-neutral-500 text-white dark:bg-neutral-600 dark:hover:bg-neutral-500';
 }
 
-export function WorkloadView({ rows, calendar, projectNameById }: Props) {
+export function WorkloadView({ rows, calendar, projectNameById, ancestorNamesById }: Props) {
   const t = useT();
   const today = toDateString(new Date());
   // eslint-disable-next-line react-hooks/exhaustive-deps -- recompute only when the day changes
@@ -281,9 +283,20 @@ export function WorkloadView({ rows, calendar, projectNameById }: Props) {
       const visualEndIdx = diffDays(p.visualEnd, viewStart);
       if (visualEndIdx < 0 || startIdx > effectiveDays - 1) return null;
       const top = ROW_PAD + p.lane * (BAR_H + LANE_GAP);
-      const projectName = projectNameById.get(p.item.project_id) ?? '';
+      // Project and parent chain first: a bare task name ("Review", "Phase 2")
+      // means little without the summary tasks it sits under.
+      const ancestors = ancestorNamesById.get(p.item.id) ?? [];
+      const path = [projectNameById.get(p.item.project_id), ...ancestors].filter(Boolean).join(' › ');
+      // On the bar: the name, then its immediate parent dimmed (truncates first).
+      const parentName = ancestors[ancestors.length - 1];
+      const label = (
+        <>
+          {p.item.name}
+          {parentName && <span className="opacity-60"> · {parentName}</span>}
+        </>
+      );
       const title =
-        `${p.item.name}${projectName ? ` · ${projectName}` : ''}\n${p.item.start_date} → ${p.item.end_date}` +
+        `${path ? `${path}\n` : ''}${p.item.name}\n${p.item.start_date} → ${p.item.end_date}` +
         (p.overdue ? `\n⚠ ${t('workload.lateTooltip', { days: p.lateDays })}` : '');
       const link = {
         to: '/projects/$projectId',
@@ -304,7 +317,7 @@ export function WorkloadView({ rows, calendar, projectNameById }: Props) {
             className={`absolute rounded px-1.5 flex items-center text-[11px] truncate shadow-sm ${barColor(p.item, today)} ${highlight}`}
             style={{ left, width: Math.max(4, right - left), top, height: BAR_H }}
           >
-            <span className="truncate">{p.item.name}</span>
+            <span className="truncate">{label}</span>
           </Link>,
         );
       }
@@ -324,7 +337,7 @@ export function WorkloadView({ rows, calendar, projectNameById }: Props) {
             )}
             style={{ ...LATE_TAIL_STYLE, left, width: Math.max(4, right - left), top, height: BAR_H }}
           >
-            {endIdx < 0 && <span className="truncate">{p.item.name}</span>}
+            {endIdx < 0 && <span className="truncate">{label}</span>}
           </Link>,
         );
       }

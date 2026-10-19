@@ -329,6 +329,9 @@ export function TaskOutline(props: Props) {
     }
     const { position, renumber } = insertionPosition(siblings, index);
     const dates = seedDates(g, spec.parentId, siblings, index);
+    // A sub-task of an assigned parent inherits that assignee (undefined lets
+    // useCreateWorkItem do it); otherwise it lands on whoever the page adds for.
+    const parentAssigned = !!(spec.parentId && idx.byId.get(spec.parentId)?.assignee_id);
 
     const id = newId();
     pin([id]);
@@ -344,7 +347,7 @@ export function TaskOutline(props: Props) {
         start_date: dates.start_date,
         end_date: dates.end_date,
         position,
-        assignee_id: g.quickAddAssigneeId,
+        assignee_id: parentAssigned ? undefined : g.quickAddAssigneeId,
       },
       { onError: (e) => toast.error((e as Error).message || t('tasks.addFailed')) },
     );

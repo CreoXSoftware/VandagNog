@@ -1,10 +1,11 @@
 import { useMemo, useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
-import { ChevronDown, ChevronRight, ZoomIn, ZoomOut, Plus, Trash2, ListPlus, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
+import { CalendarCheck, ChevronDown, ChevronRight, ZoomIn, ZoomOut, Plus, Trash2, ListPlus, ChevronsDownUp, ChevronsUpDown } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Dependency, NonWorkingDay, WorkItem } from '@/types/db';
-import { useCreateWorkItem, useDeleteWorkItem, useReorderWorkItems, useRescheduleFrom } from '@/hooks/useWorkItems';
-import { computeReparentUpdates } from '@/lib/workItemTree';
-import { cn } from '@/lib/utils';
+import { useCreateWorkItem, useDeleteWorkItem, useReorderWorkItems, useRescheduleFrom, useSetPlannedRange } from '@/hooks/useWorkItems';
+import { hasPlannedRange } from '@/lib/plannedRange';
+import { ancestorChain, computeReparentUpdates } from '@/lib/workItemTree';
+import { cn, formatDate } from '@/lib/utils';
 import {
   DAY_WIDTH,
   ROW_HEIGHT,
@@ -59,14 +60,28 @@ interface Props {
 interface FlatRow {
   item: WorkItem;
   depth: number;
+  // Has visible children (drives the expand chevron; a filter can hide them all).
   hasChildren: boolean;
+  // Has live children at all (drives bar style and what may be dragged).
+  isParent: boolean;
   dimmed: boolean;
 }
+
+// leaf: its own dates. committed: a parent with a committed range (the bar is
+// that range, resizable at both ends). fit: a parent that fits its sub-tasks.
+type BarKind = 'leaf' | 'committed' | 'fit';
+
+// Hatched fuchsia for the stretch of a committed parent that sub-tasks push
+// outside its range. Fuchsia because amber/red/blue/green are status colours.
+const OVERFLOW_BG = 'repeating-linear-gradient(135deg, rgba(192, 38, 211, 0.55) 0 3px, rgba(192, 38, 211, 0.12) 3px 6px)';
+const OVERFLOW_BORDER = '#C026D3';
 
 type DragMode = 'move' | 'resize-left' | 'resize-right';
 interface DragState {
   id: string;
   mode: DragMode;
+  // 'planned' = resizing a committed parent's range rather than an item's dates.
+  target: 'dates' | 'planned';
   startX: number;
   origStart: Date;
   origEnd: Date;
@@ -86,6 +101,7 @@ const LEVEL_DRAG_THRESHOLD = 24;
 
 export function GanttView({ projectId, workItems, dependencies, workingDays, nonWorkingDays, members, onSelect, onCreate, canEdit, selectedId }: Props) {
   const reschedule = useRescheduleFrom();
+  const setRange = useSetPlannedRange();
   const create = useCreateWorkItem();
   const reorder = useReorderWorkItems();
   const t = useT();
@@ -150,6 +166,19 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     [workItems, expanded, visibleIds, dimmedIds],
   );
   const numbers = useMemo(() => outlineNumbers(workItems), [workItems]);
+  const itemById = useMemo(() => new Map(workItems.map((w) => [w.id, w])), [workItems]);
+  // Span of each parent's live children, for previewing a committed-range drag.
+  const childSpan = useMemo(() => {
+    const out = new Map<string, { start: string | null; end: string | null }>();
+    for (const w of workItems) {
+      if (!w.parent_id || w.deleted_at) continue;
+      const cur = out.get(w.parent_id) ?? { start: null, end: null };
+      if (w.start_date && (!cur.start || w.start_date < cur.start)) cur.start = w.start_date;
+      if (w.end_date && (!cur.end || w.end_date > cur.end)) cur.end = w.end_date;
+      out.set(w.parent_id, cur);
+    }
+    return out;
+  }, [workItems]);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [createDrag, setCreateDrag] = useState<{ id: string; anchor: Date; previewStart: Date; previewEnd: Date } | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
@@ -196,22 +225,27 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const leftScrollRef = useRef<HTMLDivElement>(null);
-  const syncingScrollRef = useRef(false);
+  // The tree and the timeline mirror each other's vertical scroll. Writing one
+  // fires a scroll event on it, and that echo must not be written back: during
+  // a smooth scroll it arrives a frame late, carrying an old position, and
+  // writing it would cancel the animation and leave the chart part-way. So each
+  // pane remembers the position it was last given and ignores an event that
+  // just reports it. (A one-frame "syncing" flag can't do this: a smooth
+  // scroll spans many frames.)
+  const echoTopRef = useRef<{ left: number | null; right: number | null }>({ left: null, right: null });
   const onLeftScroll = () => {
-    if (syncingScrollRef.current) return;
     const r = scrollRef.current, l = leftScrollRef.current;
     if (!r || !l) return;
-    syncingScrollRef.current = true;
+    if (l.scrollTop === echoTopRef.current.left || l.scrollTop === r.scrollTop) return;
     r.scrollTop = l.scrollTop;
-    requestAnimationFrame(() => { syncingScrollRef.current = false; });
+    echoTopRef.current.right = r.scrollTop;
   };
   const onRightScroll = () => {
-    if (syncingScrollRef.current) return;
     const r = scrollRef.current, l = leftScrollRef.current;
     if (!r || !l) return;
-    syncingScrollRef.current = true;
+    if (r.scrollTop === echoTopRef.current.right || r.scrollTop === l.scrollTop) return;
     l.scrollTop = r.scrollTop;
-    requestAnimationFrame(() => { syncingScrollRef.current = false; });
+    echoTopRef.current.left = l.scrollTop;
   };
   const today = startOfDay(new Date());
 
@@ -278,7 +312,14 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
       if (t <= target) lo = mid; else hi = mid;
     }
     const dw = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, lo));
-    pendingFitScroll.current = { dayIndex: diffDays(range.start, viewStart) };
+    const dayIndex = diffDays(range.start, viewStart);
+    if (dw === dayWidthRef.current) {
+      // No zoom change means no new axis to wait for; a pending scroll would
+      // never be applied (and centring on a selection waits for it).
+      if (scrollRef.current) scrollRef.current.scrollLeft = Math.max(0, axisRef.current.xOf(dayIndex) - 40);
+      return;
+    }
+    pendingFitScroll.current = { dayIndex };
     setDayWidth(dw);
   }, [viewportWidth, workItems.length, range.days, range.start, calendar, viewStart]);
 
@@ -322,6 +363,80 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     const newAnchorPx = axis.xOf(p.dayIndex) + p.frac * axis.widthOf(p.dayIndex);
     scrollRef.current.scrollLeft = newAnchorPx - p.ax;
   }, [axis]);
+
+  // Selecting an item (a bar, a tree row, a search match, the drawer's
+  // breadcrumb, a link from another page) scrolls the timeline sideways so its
+  // bar sits in the middle of what is visible beside the item drawer.
+  //
+  // centerTargetRef names the item to centre explicitly. It is acted on only
+  // once that item IS the selection: the selection arrives through the router
+  // a render after the click, and the drawer mounts in that same render. Going
+  // by "whatever is selected" at click time centred the previous item first,
+  // and without the drawer on screen, so the chart jumped about.
+  const centerTargetRef = useRef<string | null>(null);
+  // The selection this view last acted on, so one made elsewhere is noticed.
+  const seenSelectionRef = useRef<string | undefined>(undefined);
+  // Re-clicking the already-selected item changes no prop; this re-runs the effect.
+  const [centerTick, setCenterTick] = useState(0);
+  // When a bar drag ended: the click that follows the drop must not scroll the
+  // chart out from under the bar that was just moved.
+  const dragEndedAtRef = useRef(0);
+  function selectAndCenter(id: string) {
+    centerTargetRef.current = id;
+    seenSelectionRef.current = id;
+    setCenterTick((n) => n + 1);
+    onSelect(id);
+  }
+  function selectWithoutCentering(id: string) {
+    centerTargetRef.current = null;
+    seenSelectionRef.current = id;
+    onSelect(id);
+  }
+  useEffect(() => {
+    if (selectedId !== seenSelectionRef.current) {
+      seenSelectionRef.current = selectedId;
+      centerTargetRef.current = selectedId ?? null;
+    }
+    const target = centerTargetRef.current;
+    if (!target || target !== selectedId) return;
+    const el = scrollRef.current;
+    // Wait for the first fit-to-project scroll, or it would override this one.
+    // The effect re-runs as those settle (axis, viewportWidth), target intact.
+    if (!el || viewportWidth === 0 || !fitInitRef.current || pendingFitScroll.current) return;
+    const idx = flatRows.findIndex((r) => r.item.id === target);
+    if (idx < 0) {
+      // Under a collapsed parent: open its ancestors and come back next render.
+      const item = itemById.get(target);
+      const closed = item ? ancestorChain(itemById, item).filter((a) => !expanded.has(a.id)) : [];
+      if (closed.length > 0) {
+        setExpanded((prev) => new Set([...prev, ...closed.map((a) => a.id)]));
+      } else {
+        centerTargetRef.current = null; // filtered out: nothing to scroll to
+      }
+      return;
+    }
+    centerTargetRef.current = null;
+
+    // Horizontal only: the vertical position is left where it is.
+    const d = effectiveDates(flatRows[idx]);
+    if (!d) return;
+    // The drawer is a fixed panel over the right of the screen; centre in the
+    // part of the timeline still visible beside it.
+    const box = el.getBoundingClientRect();
+    const panel = document.querySelector('[data-drawer-panel]')?.getBoundingClientRect();
+    const visibleRight = panel ? Math.min(box.right, panel.left) : box.right;
+    const visibleW = Math.max(200, visibleRight - box.left);
+    const rect = rectOf(d.s, d.e);
+    // A bar wider than the visible part starts near its left edge instead.
+    const left = rect.w > visibleW - 80 ? rect.x - 40 : rect.x + rect.w / 2 - visibleW / 2;
+    el.scrollTo({ left: Math.max(0, Math.min(left, el.scrollWidth - el.clientWidth)), behavior: 'smooth' });
+  }, [selectedId, centerTick, flatRows, axis, viewportWidth, expanded, itemById]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Enter in the search box: select (and so centre) the first matching row.
+  function jumpToFirstMatch() {
+    const first = flatRows.find((r) => !r.dimmed);
+    if (first) selectAndCenter(first.item.id);
+  }
 
   // Non-passive wheel listener: needed so preventDefault on ctrl/meta+wheel actually blocks browser zoom.
   useEffect(() => {
@@ -389,6 +504,20 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
         toDateString(final.previewEnd) !== toDateString(final.origEnd);
       setDrag(null);
       if (!changed) return;
+      dragEndedAtRef.current = Date.now();
+      const onError = (e: Error) => toast.error(e.message);
+      if (final.target === 'planned') {
+        setRange.mutate(
+          {
+            project_id: projectId,
+            work_item_id: final.id,
+            planned_start: toDateString(final.previewStart),
+            planned_end: toDateString(final.previewEnd),
+          },
+          { onError },
+        );
+        return;
+      }
       reschedule.mutate(
         {
           project_id: projectId,
@@ -396,7 +525,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
           new_start: toDateString(final.previewStart),
           new_end: toDateString(final.previewEnd),
         },
-        { onError: (e) => toast.error((e as Error).message) },
+        { onError },
       );
     }
     window.addEventListener('pointermove', onMove);
@@ -405,7 +534,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [drag, projectId, reschedule, calendar]);
+  }, [drag, projectId, reschedule, setRange, calendar]);
 
   function clientXToIndex(clientX: number): number | null {
     const el = scrollRef.current;
@@ -457,7 +586,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
 
   function startCreateDrag(e: React.PointerEvent, row: FlatRow) {
     if (!canEdit) return;
-    if (row.hasChildren) return;
+    if (row.isParent) return;
     if (row.item.start_date && row.item.end_date) return;
     const d = clientXToDate(e.clientX);
     if (!d) return;
@@ -723,9 +852,13 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
 
   function startDrag(e: React.PointerEvent, row: FlatRow, mode: DragMode) {
     if (!canEdit) return;
-    if (row.hasChildren) return; // rollup parents are read-only
-    const s = parseDate(row.item.start_date);
-    const en = parseDate(row.item.end_date);
+    // Parents: only a committed range resizes (its ends); a fit parent and the
+    // body of a committed one stay put — moving them wouldn't move sub-tasks.
+    const kind = barKind(row);
+    if (kind === 'fit' || (kind === 'committed' && mode === 'move')) return;
+    const planned = kind === 'committed';
+    const s = parseDate(planned ? row.item.planned_start : row.item.start_date);
+    const en = parseDate(planned ? row.item.planned_end : row.item.end_date);
     if (!s || !en) return;
     // Snapshot the ASAP bindings now; preds don't move during the drag, so
     // recomputing per pointermove would be wasted work.
@@ -740,6 +873,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
     setDrag({
       id: row.item.id,
       mode,
+      target: planned ? 'planned' : 'dates',
       startX: e.clientX,
       origStart: s,
       origEnd: en,
@@ -756,16 +890,49 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
   function rowIndexById(id: string): number {
     return flatRows.findIndex((r) => r.item.id === id);
   }
-  function barRect(row: FlatRow): { x: number; w: number } | null {
-    const isDragging = drag?.id === row.item.id;
-    const s = isDragging ? drag!.previewStart : parseDate(row.item.start_date);
-    const en = isDragging ? drag!.previewEnd : parseDate(row.item.end_date);
-    if (!s || !en) return null;
+  function barKind(row: FlatRow): BarKind {
+    if (!row.isParent) return 'leaf';
+    return hasPlannedRange(row.item) ? 'committed' : 'fit';
+  }
+
+  // Committed range of an item, as the drag preview while it is being resized.
+  function plannedOf(item: WorkItem): { s: Date; e: Date } | null {
+    if (drag?.id === item.id && drag.target === 'planned') return { s: drag.previewStart, e: drag.previewEnd };
+    const s = parseDate(item.planned_start);
+    const e = parseDate(item.planned_end);
+    return s && e ? { s, e } : null;
+  }
+
+  // Dates the bar covers: the drag preview for a leaf, the envelope of the
+  // previewed range and the sub-tasks while a committed range is resized,
+  // otherwise the stored (effective) dates.
+  function effectiveDates(row: FlatRow): { s: Date; e: Date } | null {
+    if (drag?.id === row.item.id) {
+      if (drag.target === 'dates') return { s: drag.previewStart, e: drag.previewEnd };
+      const span = childSpan.get(row.item.id);
+      const kidS = parseDate(span?.start ?? null);
+      const kidE = parseDate(span?.end ?? null);
+      return {
+        s: kidS && kidS < drag.previewStart ? kidS : drag.previewStart,
+        e: kidE && kidE > drag.previewEnd ? kidE : drag.previewEnd,
+      };
+    }
+    const s = parseDate(row.item.start_date);
+    const e = parseDate(row.item.end_date);
+    return s && e ? { s, e } : null;
+  }
+
+  function rectOf(s: Date, en: Date): { x: number; w: number } {
     const si = diffDays(s, viewStart);
     const ei = diffDays(en, viewStart);
     const x = axis.xOf(si);
     const w = axis.xOf(ei) + axis.widthOf(ei) - x;
     return { x, w };
+  }
+
+  function barRect(row: FlatRow): { x: number; w: number } | null {
+    const d = effectiveDates(row);
+    return d ? rectOf(d.s, d.e) : null;
   }
 
   const todayIdx = diffDays(today, viewStart);
@@ -781,8 +948,10 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
           members={members}
           workItems={workItems}
           currentUserId={user?.id ?? null}
+          onSubmitSearch={jumpToFirstMatch}
         />
         <div className="flex-1" />
+        <BarLegend />
         <div className="flex items-center gap-1 mr-2">
           <button
             onClick={() => zoomAt(1 / 1.25)}
@@ -897,7 +1066,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                 <div
                   key={r.item.id}
                   data-keep-drawer
-                  onClick={() => onSelect(r.item.id)}
+                  onClick={() => selectAndCenter(r.item.id)}
                   draggable={rowDraggable}
                   onDragStart={rowDraggable ? (e) => onRowDragStart(e, r.item.id) : undefined}
                   onDragOver={(e) => onRowDragOver(e, r.item.id)}
@@ -930,6 +1099,13 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                   </button>
                   <Badge className={cn(rowStatusStyle.bar, rowStatusStyle.text)}>{levelLabel(r.item.level)}</Badge>
                   <span className="text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500 shrink-0">{num}</span>
+                  {r.isParent && hasPlannedRange(r.item) && (
+                    <CalendarCheck
+                      size={11}
+                      className="shrink-0 text-neutral-500 dark:text-neutral-400"
+                      aria-label={t('workItem.committedParent')}
+                    />
+                  )}
                   <span className="text-xs truncate flex-1">{r.item.name}</span>
                   <span className="text-[10px] text-neutral-400 dark:text-neutral-500 w-7 text-right tabular-nums group-hover:hidden">{formatWorkDuration(wd)}</span>
                   <span className="text-[10px] text-neutral-400 dark:text-neutral-500 w-7 text-right tabular-nums group-hover:hidden">{r.item.progress}%</span>
@@ -1009,12 +1185,56 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
             {/* Rows */}
             <div className="absolute left-0" style={{ top: HEADER_HEIGHT, width: totalWidth }}>
               {flatRows.map((r) => {
-                const rect = barRect(r);
-                const isRollup = r.hasChildren;
+                const kind = barKind(r);
+                const eff = effectiveDates(r);
+                const rect = eff ? rectOf(eff.s, eff.e) : null;
+                const planned = kind === 'committed' ? plannedOf(r.item) : null;
+                const plannedRect = planned ? rectOf(planned.s, planned.e) : null;
                 const canCreate =
-                  canEdit && !isRollup && !(r.item.start_date && r.item.end_date);
+                  canEdit && kind === 'leaf' && !(r.item.start_date && r.item.end_date);
                 const status = statusOf(r.item, todayIso);
                 const sStyle = statusStyle(status);
+                const isDragging = drag?.id === r.item.id;
+                const label = (
+                  <>
+                    <span className="opacity-70 tabular-nums mr-1">{numbers.get(r.item.id) ?? ''}</span>
+                    {r.item.name}
+                  </>
+                );
+                // Outside the parent's committed range (the parent may be mid-resize).
+                const parent = r.item.parent_id ? itemById.get(r.item.parent_id) : undefined;
+                const parentPlanned = parent && hasPlannedRange(parent) ? plannedOf(parent) : null;
+                const outsideBefore = !!eff && !!parentPlanned && eff.s < parentPlanned.s;
+                const outsideAfter = !!eff && !!parentPlanned && eff.e > parentPlanned.e;
+                const outsideDots = (
+                  <>
+                    {outsideBefore && (
+                      <span
+                        className="absolute -left-1 -top-1 w-2 h-2 rounded-full ring-1 ring-white dark:ring-neutral-900 pointer-events-none"
+                        style={{ backgroundColor: OVERFLOW_BORDER }}
+                      />
+                    )}
+                    {outsideAfter && (
+                      <span
+                        className="absolute -right-1 -top-1 w-2 h-2 rounded-full ring-1 ring-white dark:ring-neutral-900 pointer-events-none"
+                        style={{ backgroundColor: OVERFLOW_BORDER }}
+                      />
+                    )}
+                  </>
+                );
+                const outsideNote = (outsideBefore || outsideAfter) && (
+                  <div className="opacity-80">{t('workItem.outsideParentRange')}</div>
+                );
+                const select = (e: React.MouseEvent) => {
+                  e.stopPropagation();
+                  // The click that ends a drag only selects; any other click centres.
+                  if (Date.now() - dragEndedAtRef.current < 400) {
+                    selectWithoutCentering(r.item.id);
+                  } else {
+                    selectAndCenter(r.item.id);
+                  }
+                };
+                const isSelected = selectedId === r.item.id;
                 const creating = createDrag?.id === r.item.id;
                 const createRect = creating
                   ? (() => {
@@ -1029,6 +1249,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                     key={r.item.id}
                     className={cn(
                       'relative border-b border-neutral-100 dark:border-neutral-800',
+                      isSelected && 'bg-blue-50/70 dark:bg-blue-950/30',
                       canCreate && !rect && 'cursor-crosshair',
                       r.dimmed && 'opacity-50',
                     )}
@@ -1045,17 +1266,18 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                         }}
                       />
                     )}
-                    {rect && (
+
+                    {/* Leaf: its own dates, movable and resizable. */}
+                    {rect && kind === 'leaf' && (
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <div
                             data-keep-drawer
                             className={cn(
-                              'absolute top-1 rounded text-[10px] flex items-center justify-center select-none',
+                              'absolute top-1 rounded text-[10px] flex items-center justify-center select-none cursor-move',
                               sStyle.bar,
                               sStyle.text,
-                              isRollup ? 'cursor-default' : 'cursor-move',
-                              drag?.id === r.item.id && 'ring-2 ring-blue-300',
+                              isDragging && 'ring-2 ring-blue-300',
                             )}
                             style={{
                               left: rect.x,
@@ -1063,10 +1285,7 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                               height: ROW_HEIGHT - 8,
                             }}
                             onPointerDown={(e) => startDrag(e, r, 'move')}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onSelect(r.item.id);
-                            }}
+                            onClick={select}
                           >
                             {/* progress fill — lighter shade overlay; hidden when status is 'done' (full bar already reads as complete) */}
                             {status !== 'done' && (
@@ -1075,12 +1294,9 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                                 style={{ width: `${r.item.progress}%` }}
                               />
                             )}
-                            <span className="relative px-1 truncate pointer-events-none">
-                              <span className="opacity-70 tabular-nums mr-1">{numbers.get(r.item.id) ?? ''}</span>
-                              {r.item.name}
-                            </span>
+                            <span className="relative px-1 truncate pointer-events-none">{label}</span>
 
-                            {!isRollup && canEdit && (
+                            {canEdit && (
                               <>
                                 <div
                                   className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-white/40"
@@ -1092,10 +1308,152 @@ export function GanttView({ projectId, workItems, dependencies, workingDays, non
                                 />
                               </>
                             )}
+                            {outsideDots}
                           </div>
                         </TooltipTrigger>
-                        <TooltipContent side="top">{r.item.name}</TooltipContent>
+                        <TooltipContent side="top">
+                          <div>{r.item.name}</div>
+                          {outsideNote}
+                        </TooltipContent>
                       </Tooltip>
+                    )}
+
+                    {/* Committed parent: the bar is the committed range, with a
+                        dark edge; sub-tasks outside it show as hatched overflow. */}
+                    {rect && eff && planned && plannedRect && kind === 'committed' && (
+                      <>
+                        {rect.x < plannedRect.x && (
+                          <div
+                            className="absolute top-1 rounded-l pointer-events-none"
+                            style={{
+                              left: rect.x,
+                              width: plannedRect.x - rect.x,
+                              height: ROW_HEIGHT - 8,
+                              backgroundImage: OVERFLOW_BG,
+                              border: `1px solid ${OVERFLOW_BORDER}`,
+                              borderRight: 'none',
+                            }}
+                          />
+                        )}
+                        {rect.x + rect.w > plannedRect.x + plannedRect.w && (
+                          <div
+                            className="absolute top-1 rounded-r pointer-events-none"
+                            style={{
+                              left: plannedRect.x + plannedRect.w,
+                              width: rect.x + rect.w - (plannedRect.x + plannedRect.w),
+                              height: ROW_HEIGHT - 8,
+                              backgroundImage: OVERFLOW_BG,
+                              border: `1px solid ${OVERFLOW_BORDER}`,
+                              borderLeft: 'none',
+                            }}
+                          />
+                        )}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div
+                              data-keep-drawer
+                              className={cn(
+                                'absolute top-1 rounded border-2 text-[10px] flex items-center justify-center select-none cursor-pointer',
+                                sStyle.bar,
+                                sStyle.text,
+                                isDragging && 'ring-2 ring-blue-300',
+                              )}
+                              style={{
+                                left: plannedRect.x,
+                                width: Math.max(plannedRect.w, 12),
+                                height: ROW_HEIGHT - 8,
+                                borderColor: sStyle.edgeHex,
+                              }}
+                              onClick={select}
+                            >
+                              {status !== 'done' && (
+                                <div
+                                  className={cn('absolute left-0 top-0 bottom-0 rounded-l-sm', sStyle.barProgress)}
+                                  style={{ width: `${r.item.progress}%` }}
+                                />
+                              )}
+                              <span className="relative px-1 truncate pointer-events-none flex items-center">
+                                <CalendarCheck size={10} className="shrink-0 mr-1" />
+                                <span className="truncate">{label}</span>
+                              </span>
+
+                              {canEdit && (
+                                <>
+                                  <div
+                                    className="absolute left-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-white/40"
+                                    title={t('gantt.resizeCommitted')}
+                                    onPointerDown={(e) => startDrag(e, r, 'resize-left')}
+                                  />
+                                  <div
+                                    className="absolute right-0 top-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-white/40"
+                                    title={t('gantt.resizeCommitted')}
+                                    onPointerDown={(e) => startDrag(e, r, 'resize-right')}
+                                  />
+                                </>
+                              )}
+                              {outsideDots}
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">
+                            <div>{r.item.name}</div>
+                            <div className="opacity-80">
+                              {t('gantt.committedTooltip', {
+                                start: formatDate(planned.s),
+                                end: formatDate(planned.e),
+                              })}
+                              {(eff.s < planned.s || eff.e > planned.e) &&
+                                ` · ${t('gantt.overflowTooltip', {
+                                  count:
+                                    (eff.s < planned.s ? workingDayHops(eff.s, planned.s, calendar) : 0) +
+                                    (eff.e > planned.e ? workingDayHops(planned.e, eff.e, calendar) : 0),
+                                })}`}
+                            </div>
+                            {outsideNote}
+                          </TooltipContent>
+                        </Tooltip>
+                      </>
+                    )}
+
+                    {/* Fit-to-sub-tasks parent: a summary bracket over the
+                        rolled-up span, label beside it. Read-only. */}
+                    {rect && kind === 'fit' && (
+                      <>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div
+                              data-keep-drawer
+                              className="absolute cursor-pointer"
+                              style={{
+                                left: rect.x,
+                                width: Math.max(rect.w, 12),
+                                top: ROW_HEIGHT / 2 - 4,
+                                height: 10,
+                              }}
+                              onClick={select}
+                            >
+                              <div className="absolute inset-x-0 top-0 h-[5px] rounded-sm" style={{ backgroundColor: sStyle.hex }} />
+                              <SummaryCap className="absolute left-0 top-1" color={sStyle.hex} />
+                              <SummaryCap className="absolute right-0 top-1" color={sStyle.hex} />
+                              {outsideDots}
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">
+                            <div>{r.item.name}</div>
+                            <div className="opacity-80">{t('gantt.fitTooltip')}</div>
+                            {outsideNote}
+                          </TooltipContent>
+                        </Tooltip>
+                        <span
+                          className="absolute text-[10px] text-neutral-600 dark:text-neutral-300 whitespace-nowrap pointer-events-none"
+                          style={{
+                            left: rect.x + Math.max(rect.w, 12) + 6,
+                            top: 0,
+                            lineHeight: `${ROW_HEIGHT}px`,
+                          }}
+                        >
+                          {label}
+                        </span>
+                      </>
                     )}
                   </div>
                 );
@@ -1224,6 +1582,51 @@ function TimelineHeader({ viewStart, days, axis, todayX, calendar, locale }: { v
   );
 }
 
+// Downward end cap of a fit-to-sub-tasks summary bracket.
+function SummaryCap({ className, color }: { className?: string; color: string }) {
+  return (
+    <svg className={className} width="8" height="6" viewBox="0 0 8 6" aria-hidden>
+      <polygon points="0,0 8,0 4,6" fill={color} />
+    </svg>
+  );
+}
+
+// Toolbar key for the three bar kinds and the overflow hatch.
+function BarLegend() {
+  const t = useT();
+  const blue = statusStyle('future');
+  return (
+    <div className="hidden lg:flex items-center gap-3 mr-2 text-[10px] text-neutral-500 dark:text-neutral-400">
+      <span className="flex items-center gap-1">
+        <span className={cn('inline-block w-4 h-2.5 rounded-sm', blue.bar)} />
+        {t('gantt.legendTask')}
+      </span>
+      <span className="flex items-center gap-1">
+        <span
+          className={cn('inline-block w-4 h-2.5 rounded-sm border-2', blue.bar)}
+          style={{ borderColor: blue.edgeHex }}
+        />
+        {t('gantt.legendCommitted')}
+      </span>
+      <span className="flex items-center gap-1">
+        <span className="relative inline-block w-4 h-2.5">
+          <span className="absolute inset-x-0 top-0.5 h-[4px] rounded-sm" style={{ backgroundColor: blue.hex }} />
+          <SummaryCap className="absolute -left-px top-1" color={blue.hex} />
+          <SummaryCap className="absolute -right-px top-1" color={blue.hex} />
+        </span>
+        {t('gantt.legendFit')}
+      </span>
+      <span className="flex items-center gap-1">
+        <span
+          className="inline-block w-4 h-2.5 rounded-sm"
+          style={{ backgroundImage: OVERFLOW_BG, border: `1px solid ${OVERFLOW_BORDER}` }}
+        />
+        {t('gantt.legendOverflow')}
+      </span>
+    </div>
+  );
+}
+
 function monthLabel(d: Date, locale: string): string {
   return d.toLocaleDateString(locale, { month: 'short', year: 'numeric' });
 }
@@ -1235,8 +1638,12 @@ function flatten(
   dimmedIds: Set<string>,
 ): FlatRow[] {
   const byParent = new Map<string | null, WorkItem[]>();
+  // From every live item, not just visible ones: a filter that hides all of a
+  // parent's children must not turn it into a draggable leaf.
+  const parentIds = new Set<string>();
   for (const it of items) {
     if (it.deleted_at) continue;
+    if (it.parent_id) parentIds.add(it.parent_id);
     if (visibleIds && !visibleIds.has(it.id)) continue;
     const k = it.parent_id ?? null;
     if (!byParent.has(k)) byParent.set(k, []);
@@ -1252,6 +1659,7 @@ function flatten(
         item: it,
         depth,
         hasChildren: children.length > 0,
+        isParent: parentIds.has(it.id),
         dimmed: dimmedIds.has(it.id),
       });
       if (children.length > 0 && expanded.has(it.id)) {

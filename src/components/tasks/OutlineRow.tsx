@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react';
-import { ChevronDown, ChevronRight, GripVertical, ListTree, Trash2 } from 'lucide-react';
+import { CalendarCheck, ChevronDown, ChevronRight, GripVertical, ListTree, Trash2, TriangleAlert } from 'lucide-react';
 import { Avatar } from '@/components/ui/Avatar';
 import { cn } from '@/lib/utils';
 import { useT } from '@/lib/i18n';
 import { quickKeyOf, quickLabel, type QuickKey } from '@/lib/platform';
 import { formatRange, isMultilineDescription } from '@/lib/taskFormat';
+import { hasPlannedRange } from '@/lib/plannedRange';
 import type { OutlineRow } from '@/lib/taskOutline';
 import type { TasksPerson } from '@/hooks/useTasksData';
 
@@ -88,6 +89,12 @@ export function ItemRow({
   const { item, depth, isParent, visibleChildren, collapsed } = row;
   const done = item.progress >= 100;
   const overdue = !done && !!item.end_date && item.end_date < today;
+  const committed = isParent && hasPlannedRange(item);
+  // Sub-tasks push the effective dates past the committed range.
+  const overflowing =
+    committed &&
+    ((!!item.start_date && item.start_date < item.planned_start!) ||
+      (!!item.end_date && item.end_date > item.planned_end!));
   const nameRef = useRef<HTMLInputElement | null>(null);
 
   // Local draft of the name. Re-synced from the server value whenever that
@@ -204,12 +211,13 @@ export function ItemRow({
 
       {isParent ? (
         // Summary rows roll their dates and progress up from their children
-        // (work_items_rollup), so ticking one would silently revert.
+        // (work_items_rollup), so ticking one would silently revert. A
+        // committed parent holds its own range; a fit one follows its children.
         <span
           className="shrink-0 h-4 w-4 flex items-center justify-center text-neutral-400 dark:text-neutral-500"
-          title={t('tasks.rollupHint')}
+          title={committed ? t('workItem.committedParent') : t('tasks.rollupHint')}
         >
-          <ListTree size={13} />
+          {committed ? <CalendarCheck size={13} /> : <ListTree size={13} />}
         </span>
       ) : (
         // Disabled inputs swallow pointer events, so the title lives on the wrapper.
@@ -358,6 +366,15 @@ export function ItemRow({
       {(isParent || (item.progress > 0 && !done)) && (
         <span className="shrink-0 text-[10px] tabular-nums text-neutral-400 dark:text-neutral-500">
           {item.progress}%
+        </span>
+      )}
+
+      {overflowing && (
+        <span
+          className="shrink-0 text-fuchsia-600 dark:text-fuchsia-400"
+          title={t('gantt.legendOverflow')}
+        >
+          <TriangleAlert size={12} />
         </span>
       )}
 

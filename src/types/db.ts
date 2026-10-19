@@ -137,6 +137,10 @@ export interface WorkItem {
   start_date: string | null;
   end_date: string | null;
   duration_days: number | null;
+  // Committed range of a parent (both or neither). Its start_date/end_date are
+  // the envelope of this range and its children; null = fit to sub-tasks.
+  planned_start: string | null;
+  planned_end: string | null;
   progress: number;
   assignee_id: string | null;
   position: number;

@@ -39,6 +39,10 @@ export interface StatusStyle {
   bar: string;
   barProgress: string;
   text: string;
+  // Raw colours for gantt shapes Tailwind classes can't express (summary
+  // bracket caps) and the darker edge of a committed parent bar.
+  hex: string;
+  edgeHex: string;
 }
 
 // Vibrant palette tuned to the logo's warm orange→yellow gradient (#fc861d → #f4e23c)
@@ -50,12 +54,12 @@ export interface StatusStyle {
 //   blue   bar #2563EB  progress #3B82F6   (blue-600 / blue-500)
 // "done" uses a single emerald shade (fully-completed bar).
 const STATUS_STYLES: Record<WorkItemStatus, StatusStyle> = {
-  done:        { bar: 'bg-[#22C55E]', barProgress: 'bg-[#22C55E]', text: 'text-white' },
-  overdue:     { bar: 'bg-[#DC2626]', barProgress: 'bg-[#EF4444]', text: 'text-white' },
+  done:        { bar: 'bg-[#22C55E]', barProgress: 'bg-[#22C55E]', text: 'text-white', hex: '#22C55E', edgeHex: '#15803D' },
+  overdue:     { bar: 'bg-[#DC2626]', barProgress: 'bg-[#EF4444]', text: 'text-white', hex: '#DC2626', edgeHex: '#7F1D1D' },
   // Amber needs dark text — white on amber has insufficient contrast at any shade.
-  active:      { bar: 'bg-[#F59E0B]', barProgress: 'bg-[#FBBF24]', text: 'text-neutral-900' },
-  future:      { bar: 'bg-[#2563EB]', barProgress: 'bg-[#3B82F6]', text: 'text-white' },
-  unscheduled: { bar: 'bg-neutral-600', barProgress: 'bg-neutral-400', text: 'text-white' },
+  active:      { bar: 'bg-[#F59E0B]', barProgress: 'bg-[#FBBF24]', text: 'text-neutral-900', hex: '#F59E0B', edgeHex: '#92400E' },
+  future:      { bar: 'bg-[#2563EB]', barProgress: 'bg-[#3B82F6]', text: 'text-white', hex: '#2563EB', edgeHex: '#1E3A8A' },
+  unscheduled: { bar: 'bg-neutral-600', barProgress: 'bg-neutral-400', text: 'text-white', hex: '#525252', edgeHex: '#171717' },
 };
 
 // Day-only compare: "YYYY-MM-DD" lexicographic order matches calendar order.

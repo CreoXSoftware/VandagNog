@@ -7,9 +7,11 @@ import { DisabledHint } from '@/components/ui/DisabledHint';
 import { WorkingDayPicker } from '@/components/ui/WorkingDayPicker';
 import { cn, formatDate } from '@/lib/utils';
 import type { Dependency, NonWorkingDay, ProjectMember, WorkItem } from '@/types/db';
-import { useUpdateWorkItem, useRescheduleFrom } from '@/hooks/useWorkItems';
-import { buildCalendar, toDateString, type WorkCalendar } from '@/components/gantt/ganttUtils';
+import { CalendarCheck, TriangleAlert } from 'lucide-react';
+import { useUpdateWorkItem, useRescheduleFrom, useSetPlannedRange } from '@/hooks/useWorkItems';
+import { buildCalendar, parseDate, toDateString, type WorkCalendar } from '@/components/gantt/ganttUtils';
 import { computeSuccessorBinding } from '@/lib/cascade';
+import { hasPlannedRange, plannedOverflow } from '@/lib/plannedRange';
 import { DependencyEditor } from './DependencyEditor';
 import { CommentThread } from './CommentThread';
 import { AttachmentsSection } from './AttachmentsSection';
@@ -45,6 +47,7 @@ interface Props {
 export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, nonWorkingDays, members, canEdit, autoFocusName, autoFocusDescription, initialTab, onNameFocused, onDescriptionFocused, onClose, onNavigate }: Props) {
   const update = useUpdateWorkItem();
   const reschedule = useRescheduleFrom();
+  const setRange = useSetPlannedRange();
   const [tab, setTab] = useState<'details' | 'comments'>(initialTab ?? 'comments');
   const t = useT();
 
@@ -83,6 +86,10 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
   const children = useMemo(() => allItems.filter((i) => i.parent_id === workItem.id), [allItems, workItem.id]);
   const numbers = useMemo(() => outlineNumbers(allItems), [allItems]);
   const isLeaf = children.length === 0;
+  const committed = !isLeaf && hasPlannedRange(workItem);
+  const overflow = committed ? plannedOverflow(workItem, calendar) : { before: 0, after: 0 };
+  // Leaves edit their own dates; parents edit their committed range (start/end
+  // only — duration and progress still roll up).
   const canEditDates = canEdit && isLeaf;
   const permReason = !canEdit ? t('workItem.permReason') : null;
   const dateReason = !canEdit
@@ -118,6 +125,34 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
     }
     reschedule.mutate(
       { project_id: workItem.project_id, work_item_id: workItem.id, new_start: newStart, new_end: newEnd },
+      { onError: (e) => toast.error((e as Error).message) },
+    );
+  }
+
+  // Parent: pick a start or end to commit (a fit parent commits its current
+  // span with the picked side changed).
+  function handleRangeChange(newStart: string | null, newEnd: string | null) {
+    if (!newStart || !newEnd) return;
+    if (newEnd < newStart) {
+      toast.error(t('cascade.endBeforeStart'));
+      return;
+    }
+    if (
+      (startBindingStr && newStart < startBindingStr) ||
+      (endBindingStr && newEnd < endBindingStr)
+    ) {
+      toast.error(t('cascade.violatesBinding'));
+      return;
+    }
+    setRange.mutate(
+      { project_id: workItem.project_id, work_item_id: workItem.id, planned_start: newStart, planned_end: newEnd },
+      { onError: (e) => toast.error((e as Error).message) },
+    );
+  }
+
+  function fitToSubtasks() {
+    setRange.mutate(
+      { project_id: workItem.project_id, work_item_id: workItem.id, planned_start: null, planned_end: null },
       { onError: (e) => toast.error((e as Error).message) },
     );
   }
@@ -190,7 +225,10 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
           <Badge className={cn(headerStatusStyle.bar, headerStatusStyle.text)}>{levelLabel(workItem.level)}</Badge>
           <span className="text-[10px] tabular-nums text-neutral-500 dark:text-neutral-400">#{numbers.get(workItem.id) ?? ''}</span>
           {!isLeaf && (
-            <span className="text-[10px] text-neutral-500 dark:text-neutral-400">{t('workItem.rollupParent')}</span>
+            <span className="flex items-center gap-1 text-[10px] text-neutral-500 dark:text-neutral-400">
+              {committed && <CalendarCheck size={11} />}
+              {committed ? t('workItem.committedParent') : t('workItem.fitParent')}
+            </span>
           )}
         </div>
 
@@ -219,28 +257,63 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
         </DisabledHint>
 
         <div className="grid grid-cols-3 gap-3">
-          <Field label={t('workItem.start')}>
-            <DisabledHint disabled={!canEditDates} reason={dateReason}>
-              <WorkingDayPicker
-                value={workItem.start_date}
-                calendar={calendar}
-                disabled={!canEditDates}
-                minDate={startBindingStr}
-                onChange={(v) => handleDateChange(v, workItem.end_date)}
-              />
-            </DisabledHint>
-          </Field>
-          <Field label={t('workItem.end')}>
-            <DisabledHint disabled={!canEditDates} reason={dateReason}>
-              <WorkingDayPicker
-                value={workItem.end_date}
-                calendar={calendar}
-                disabled={!canEditDates}
-                minDate={endBindingStr}
-                onChange={(v) => handleDateChange(workItem.start_date, v)}
-              />
-            </DisabledHint>
-          </Field>
+          {isLeaf ? (
+            <>
+              <Field label={t('workItem.start')}>
+                <DisabledHint disabled={!canEditDates} reason={dateReason}>
+                  <WorkingDayPicker
+                    value={workItem.start_date}
+                    calendar={calendar}
+                    disabled={!canEditDates}
+                    minDate={startBindingStr}
+                    onChange={(v) => handleDateChange(v, workItem.end_date)}
+                  />
+                </DisabledHint>
+              </Field>
+              <Field label={t('workItem.end')}>
+                <DisabledHint disabled={!canEditDates} reason={dateReason}>
+                  <WorkingDayPicker
+                    value={workItem.end_date}
+                    calendar={calendar}
+                    disabled={!canEditDates}
+                    minDate={endBindingStr}
+                    onChange={(v) => handleDateChange(workItem.start_date, v)}
+                  />
+                </DisabledHint>
+              </Field>
+            </>
+          ) : (
+            <>
+              {/* Parent: the committed range (a fit parent shows, and commits
+                  from, its current span). */}
+              <Field label={t('workItem.start')}>
+                <DisabledHint disabled={!canEdit} reason={permReason}>
+                  <WorkingDayPicker
+                    value={committed ? workItem.planned_start : workItem.start_date}
+                    calendar={calendar}
+                    disabled={!canEdit}
+                    minDate={startBindingStr}
+                    onChange={(v) =>
+                      handleRangeChange(v, committed ? workItem.planned_end : workItem.end_date)
+                    }
+                  />
+                </DisabledHint>
+              </Field>
+              <Field label={t('workItem.end')}>
+                <DisabledHint disabled={!canEdit} reason={permReason}>
+                  <WorkingDayPicker
+                    value={committed ? workItem.planned_end : workItem.end_date}
+                    calendar={calendar}
+                    disabled={!canEdit}
+                    minDate={endBindingStr}
+                    onChange={(v) =>
+                      handleRangeChange(committed ? workItem.planned_start : workItem.start_date, v)
+                    }
+                  />
+                </DisabledHint>
+              </Field>
+            </>
+          )}
           <Field label={t('workItem.duration')}>
             <DisabledHint disabled={!canEditDates} reason={dateReason}>
               <DurationField
@@ -254,6 +327,48 @@ export function WorkItemDrawer({ workItem, allItems, dependencies, workingDays, 
             </DisabledHint>
           </Field>
         </div>
+
+        {!isLeaf && (
+          <div className="-mt-2 space-y-1 text-[11px]">
+            {committed ? (
+              <>
+                {(overflow.before > 0 || overflow.after > 0) && (
+                  <div className="text-neutral-500 dark:text-neutral-400 tabular-nums">
+                    {t('workItem.effectiveSpan', {
+                      start: formatDate(parseDate(workItem.start_date)),
+                      end: formatDate(parseDate(workItem.end_date)),
+                    })}
+                  </div>
+                )}
+                {overflow.before > 0 && (
+                  <div className="flex items-start gap-1 text-fuchsia-700 dark:text-fuchsia-400">
+                    <TriangleAlert size={12} className="mt-px shrink-0" />
+                    {t('workItem.overflowBefore', { count: overflow.before })}
+                  </div>
+                )}
+                {overflow.after > 0 && (
+                  <div className="flex items-start gap-1 text-fuchsia-700 dark:text-fuchsia-400">
+                    <TriangleAlert size={12} className="mt-px shrink-0" />
+                    {t('workItem.overflowAfter', { count: overflow.after })}
+                  </div>
+                )}
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={fitToSubtasks}
+                    disabled={setRange.isPending}
+                    title={t('workItem.fitToSubtasksHint')}
+                    className="text-blue-600 dark:text-blue-400 hover:underline disabled:opacity-40"
+                  >
+                    {t('workItem.fitToSubtasks')}
+                  </button>
+                )}
+              </>
+            ) : (
+              <div className="text-neutral-500 dark:text-neutral-400">{t('workItem.fitParentHint')}</div>
+            )}
+          </div>
+        )}
 
         <Field label={t('workItem.assignee')}>
           <div className="flex items-center gap-2">

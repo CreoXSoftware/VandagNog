@@ -20,6 +20,9 @@ interface Props {
   setHideEmpty: (v: boolean) => void;
   overdueOnly: boolean;
   setOverdueOnly: (v: boolean) => void;
+  /** Only my own row; overrides the people and guest filters. */
+  onlyMine: boolean;
+  setOnlyMine: (v: boolean) => void;
 }
 
 export function WorkloadFilters(props: Props) {
@@ -40,10 +43,13 @@ export function WorkloadFilters(props: Props) {
     setHideEmpty,
     overdueOnly,
     setOverdueOnly,
+    onlyMine,
+    setOnlyMine,
   } = props;
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
+
       {/* Person search */}
       <div className="relative">
         <Search
@@ -77,6 +83,17 @@ export function WorkloadFilters(props: Props) {
         setSelected={setProjectIds}
         clearLabel={t('workload.clear')}
       />
+
+      {/* Only my own row */}
+      <label className="flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-300 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={onlyMine}
+          onChange={(e) => setOnlyMine(e.target.checked)}
+          className="h-3.5 w-3.5"
+        />
+        {t('workload.onlyMine')}
+      </label>
 
       {/* Guests of the organization */}
       {hasGuests && (

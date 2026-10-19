@@ -4,6 +4,7 @@ import { buildCalendar, type WorkCalendar } from '@/components/gantt/ganttUtils'
 import { displayName } from '@/lib/userDisplay';
 import { useCurrentOrg } from '@/lib/currentOrg';
 import { leafItemIds } from '@/lib/workload';
+import { ancestorChain } from '@/lib/workItemTree';
 import { fetchOrgProjectMembers } from './useOrgs';
 import type { WorkItem } from '@/types/db';
 
@@ -29,6 +30,8 @@ export interface WorkloadData {
   tasks: WorkItem[];
   /** Projects I can see in the current organization — for the project filter. */
   projects: WorkloadProjectInfo[];
+  /** Per task: names of its parents, outermost first, so a bare task name has context. */
+  ancestorNamesById: Map<string, string[]>;
   /** Shared working calendar (union of project calendars) for axis + load math. */
   calendar: WorkCalendar;
 }
@@ -97,6 +100,11 @@ export function useWorkloadData() {
           peopleById.has(it.assignee_id),
       );
 
+      const byId = new Map(allItems.map((it) => [it.id, it]));
+      const ancestorNamesById = new Map(
+        tasks.map((tk) => [tk.id, ancestorChain(byId, tk).map((a) => a.name)]),
+      );
+
       // Shared calendar: union of working days across visible projects (default Mon–Fri).
       const weekly = new Set<number>();
       for (const p of projects) for (const d of p.working_days ?? []) weekly.add(d);
@@ -109,6 +117,7 @@ export function useWorkloadData() {
         ),
         tasks,
         projects: projects.map((p) => ({ id: p.id, name: p.name })),
+        ancestorNamesById,
         calendar,
       };
     },

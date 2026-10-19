@@ -5,36 +5,28 @@ import { WorkloadFilters } from '@/components/workload/WorkloadFilters';
 import { WorkloadView, type WorkloadRow } from '@/components/workload/WorkloadView';
 import { toDateString } from '@/components/gantt/ganttUtils';
 import { isOverdue } from '@/lib/workload';
+import { loadWorkloadPrefs, saveWorkloadPrefs } from '@/lib/workloadPrefs';
+import { useAuth } from '@/hooks/useAuth';
 import type { WorkItem } from '@/types/db';
-
-const SHOW_GUESTS_KEY = 'vn.workload.showGuests';
-
-function readShowGuests(): boolean {
-  try {
-    return localStorage.getItem(SHOW_GUESTS_KEY) !== '0';
-  } catch {
-    return true;
-  }
-}
 
 export function WorkloadPage() {
   const t = useT();
   const { data, isLoading, error } = useWorkloadData();
+  const { user } = useAuth();
+  const me = user?.id ?? null;
 
-  const [projectIds, setProjectIds] = useState<string[]>([]);
-  const [personIds, setPersonIds] = useState<string[]>([]);
-  const [showGuests, setShowGuests] = useState(readShowGuests);
-  const [search, setSearch] = useState('');
-  const [hideEmpty, setHideEmpty] = useState(true);
-  const [overdueOnly, setOverdueOnly] = useState(false);
+  const [prefs0] = useState(loadWorkloadPrefs);
+  const [projectIds, setProjectIds] = useState<string[]>(prefs0.projectIds);
+  const [personIds, setPersonIds] = useState<string[]>(prefs0.personIds);
+  const [showGuests, setShowGuests] = useState(prefs0.showGuests);
+  const [search, setSearch] = useState(prefs0.search);
+  const [hideEmpty, setHideEmpty] = useState(prefs0.hideEmpty);
+  const [overdueOnly, setOverdueOnly] = useState(prefs0.overdueOnly);
+  const [onlyMine, setOnlyMine] = useState(prefs0.onlyMine);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(SHOW_GUESTS_KEY, showGuests ? '1' : '0');
-    } catch {
-      // not remembered, still works
-    }
-  }, [showGuests]);
+    saveWorkloadPrefs({ projectIds, personIds, showGuests, search, hideEmpty, overdueOnly, onlyMine });
+  }, [projectIds, personIds, showGuests, search, hideEmpty, overdueOnly, onlyMine]);
 
   const hasGuests = useMemo(() => (data?.people ?? []).some((p) => p.is_guest), [data]);
 
@@ -51,8 +43,12 @@ export function WorkloadPage() {
     const q = search.trim().toLowerCase();
 
     let people = data.people;
-    if (!showGuests) people = people.filter((p) => !p.is_guest);
-    if (personSet.size > 0) people = people.filter((p) => personSet.has(p.user_id));
+    if (onlyMine) {
+      people = people.filter((p) => p.user_id === me);
+    } else {
+      if (!showGuests) people = people.filter((p) => !p.is_guest);
+      if (personSet.size > 0) people = people.filter((p) => personSet.has(p.user_id));
+    }
     if (q) people = people.filter((p) => p.display_name.toLowerCase().includes(q));
 
     const byPerson = new Map<string, WorkItem[]>();
@@ -75,7 +71,7 @@ export function WorkloadPage() {
     if (hideEmpty || overdueOnly) result = result.filter((r) => r.tasks.length > 0);
     result.sort((a, b) => b.overdue - a.overdue);
     return result.map(({ person, tasks }) => ({ person, tasks }));
-  }, [data, projectIds, personIds, showGuests, search, hideEmpty, overdueOnly]);
+  }, [data, projectIds, personIds, showGuests, search, hideEmpty, overdueOnly, onlyMine, me]);
 
   const projectNameById = useMemo(
     () => new Map((data?.projects ?? []).map((p) => [p.id, p.name])),
@@ -106,6 +102,8 @@ export function WorkloadPage() {
           setHideEmpty={setHideEmpty}
           overdueOnly={overdueOnly}
           setOverdueOnly={setOverdueOnly}
+          onlyMine={onlyMine}
+          setOnlyMine={setOnlyMine}
         />
         <StatusLegend />
       </div>
@@ -122,6 +120,7 @@ export function WorkloadPage() {
             rows={rows}
             calendar={data!.calendar}
             projectNameById={projectNameById}
+            ancestorNamesById={data!.ancestorNamesById}
           />
         )}
       </div>

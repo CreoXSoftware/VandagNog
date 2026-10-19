@@ -20,6 +20,12 @@ import type { TrackerTarget } from '@/types/db';
 interface Props {
   target: TrackerTarget | null;
   setTarget: (t: TrackerTarget | null) => void;
+  /**
+   * The note, shared with manual entry so switching keeps it. The page keeps
+   * it in step with the running entry (see TrackerPage).
+   */
+  notes: string;
+  setNotes: (v: string) => void;
   /** Rendered as the card's first row (the Live / Manual switch). */
   header?: React.ReactNode;
 }
@@ -27,29 +33,19 @@ interface Props {
 // Note · elapsed · start/stop on the first row, client › project › task on the
 // second. While a timer runs, both the note and the target stay editable and
 // are written to the running entry.
-export function LiveTimerCard({ target, setTarget, header }: Props) {
+export function LiveTimerCard({ target, setTarget, notes, setNotes, header }: Props) {
   const t = useT();
   const { data: active } = useActiveTimer();
   const start = useStartTimer();
   const stop = useStopTimer();
   const updateActive = useUpdateActiveTimer();
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [notes, setNotes] = useState('');
   const now = useServerNow(!!active);
 
   const running = !!active;
   // The optimistic row from a just-pressed Start can't be edited until the real one lands.
   const editable = !!active && active.id !== '__optimistic__';
   const liveElapsed = active ? Math.max(0, now - new Date(active.start_at).getTime()) : 0;
-
-  // Show the running entry's note; clear the box when the timer stops. Adjusted
-  // during render when the entry changes, so typing isn't overwritten by refetches.
-  const activeId = active?.id ?? null;
-  const [notesFor, setNotesFor] = useState<string | null>(null);
-  if (activeId !== notesFor) {
-    setNotesFor(activeId);
-    setNotes(active?.notes ?? '');
-  }
 
   const runningTarget: TrackerTarget | null = active
     ? {

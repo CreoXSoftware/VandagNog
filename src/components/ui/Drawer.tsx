@@ -59,6 +59,7 @@ export function Drawer({ open, onClose, title, children, widthClass = 'w-[480px]
         )}
         role="dialog"
         aria-modal="false"
+        data-drawer-panel
       >
         <header className="flex items-center justify-between px-4 h-12 border-b border-neutral-200 dark:border-neutral-800 shrink-0">
           <div className="text-sm font-medium truncate">{title}</div>
