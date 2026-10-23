@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { GripVertical, Minus, Play, Square, Timer } from 'lucide-react';
+import { GripVertical, Minus, Play, Square, Timer, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '@/lib/i18n';
 import {
@@ -12,6 +12,7 @@ import {
 } from '@/hooks/useTimeEntries';
 import { useTrackerCatalog } from '@/hooks/useTrackerCatalog';
 import { TaskTargetPicker, TargetPathText, labelForTarget } from './TaskTargetPicker';
+import { useDiscardRunningTimer } from '@/hooks/useDiscardRunningTimer';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/Tooltip';
 import { formatHMS } from '@/lib/timeFormat';
 import { useServerNow } from '@/lib/serverClock';
@@ -32,6 +33,7 @@ export function FloatingTimerWidget() {
   const start = useStartTimer();
   const stop = useStopTimer();
   const updateActive = useUpdateActiveTimer();
+  const discard = useDiscardRunningTimer();
 
   const [collapsed, setCollapsed] = useState<boolean>(() => readBool(COLLAPSED_KEY, true));
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -248,6 +250,19 @@ export function FloatingTimerWidget() {
             {formatHMS(elapsedMs)}
           </div>
 
+          {running && (
+            <button
+              type="button"
+              data-no-drag
+              onClick={discard.run}
+              disabled={active?.id === '__optimistic__' || discard.isPending || stop.isPending}
+              aria-label={t('tracker.discard')}
+              title={t('tracker.discard')}
+              className="h-8 w-8 rounded-full flex items-center justify-center shrink-0 text-neutral-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
           <button
             type="button"
             data-no-drag

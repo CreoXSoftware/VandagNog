@@ -153,6 +153,58 @@ export function useStopTimer() {
   });
 }
 
+// Throw away the running entry instead of logging it (a timer started by
+// mistake). Takes the running entry rather than reading the cache, because
+// onMutate has already cleared it by the time mutationFn runs. Resolves to the
+// deleted row so the caller can offer an undo.
+export function useDiscardTimer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (active: TimeEntry): Promise<TimeEntry> => {
+      if (active.id === '__optimistic__') throw new Error('No running timer');
+      const { error } = await supabase
+        .from('time_entries')
+        .delete()
+        .eq('id', active.id)
+        .is('end_at', null);
+      if (error) throw error;
+      return active;
+    },
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: activeTimerKey });
+      const prev = qc.getQueryData<TimeEntry | null>(activeTimerKey);
+      qc.setQueryData(activeTimerKey, null);
+      return { prev };
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx && 'prev' in ctx) qc.setQueryData(activeTimerKey, ctx.prev ?? null);
+    },
+    onSettled: () => invalidateAll(qc),
+  });
+}
+
+// Undo for a discard: puts the running row back as it was. Fails if another
+// timer was started in the meantime (one running entry per user).
+export function useRestoreTimer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (entry: TimeEntry): Promise<void> => {
+      const { error } = await supabase.from('time_entries').insert({
+        id: entry.id,
+        user_id: entry.user_id,
+        project_id: entry.project_id,
+        work_item_id: entry.work_item_id,
+        custom_task_text: entry.custom_task_text,
+        notes: entry.notes,
+        start_at: entry.start_at,
+        end_at: null,
+      });
+      if (error) throw error;
+    },
+    onSettled: () => invalidateAll(qc),
+  });
+}
+
 export type ActiveTimerPatch = Partial<
   Pick<TimeEntry, 'project_id' | 'work_item_id' | 'custom_task_text' | 'notes'>
 >;

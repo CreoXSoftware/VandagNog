@@ -6,8 +6,8 @@ import { Button } from '@/components/ui/Button';
 import { Input, Textarea } from '@/components/ui/Input';
 import { useT } from '@/lib/i18n';
 import { useDeleteTimeEntry, useUpdateTimeEntry } from '@/hooks/useTimeEntries';
-import { useTrackerCatalog } from '@/hooks/useTrackerCatalog';
-import { TaskTargetPicker, TaskTargetTrigger } from './TaskTargetPicker';
+import { TaskTargetPicker } from './TaskTargetPicker';
+import { TargetSegments } from './TargetSegments';
 import { NextDayMark } from './ManualEntryForm';
 import { daysApart, isoDate, isoTime, sessionRange } from '@/lib/timeFormat';
 import type { TimeEntry, TrackerTarget } from '@/types/db';
@@ -20,7 +20,6 @@ interface Props {
 
 export function SessionEditDialog({ entry, open, onOpenChange }: Props) {
   const t = useT();
-  const { data: catalog } = useTrackerCatalog();
   const update = useUpdateTimeEntry();
   const del = useDeleteTimeEntry();
 
@@ -89,23 +88,23 @@ export function SessionEditDialog({ entry, open, onOpenChange }: Props) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent title={t('tracker.editEntry')}>
         <div className="space-y-3">
-          <TaskTargetTrigger
-            value={target}
-            catalog={catalog}
-            onClick={() => setPickerOpen(true)}
-          />
+          {/* Same client › project › task menus (and search) as the timer. A
+              session always has a project, so there's no clearing it. */}
+          <TargetSegments value={target} onPick={setTarget} onSearch={() => setPickerOpen(true)} />
 
+          {/* Every label is a fixed-height row, so the "+1d" mark beside End
+              doesn't push its input out of line with the others. */}
           <div className="grid grid-cols-3 gap-2">
             <div>
-              <label className="text-xs text-neutral-500 dark:text-neutral-400">{t('tracker.date')}</label>
+              <label className={labelClass}>{t('tracker.date')}</label>
               <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
             </div>
             <div>
-              <label className="text-xs text-neutral-500 dark:text-neutral-400">{t('tracker.startTime')}</label>
+              <label className={labelClass}>{t('tracker.startTime')}</label>
               <Input type="time" value={start} onChange={(e) => setStart(e.target.value)} />
             </div>
             <div>
-              <label className="flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+              <label className={labelClass}>
                 {t('tracker.endTime')}
                 {endDays > 0 && <NextDayMark days={endDays} date={endDate} />}
               </label>
@@ -114,7 +113,7 @@ export function SessionEditDialog({ entry, open, onOpenChange }: Props) {
           </div>
 
           <div>
-            <label className="text-xs text-neutral-500 dark:text-neutral-400">{t('tracker.notesLabel')}</label>
+            <label className={labelClass}>{t('tracker.notesLabel')}</label>
             <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} className="min-h-[60px]" />
           </div>
 
@@ -135,9 +134,11 @@ export function SessionEditDialog({ entry, open, onOpenChange }: Props) {
           open={pickerOpen}
           onOpenChange={setPickerOpen}
           value={target}
-          onPick={(t) => setTarget(t)}
+          onPick={setTarget}
         />
       </DialogContent>
     </Dialog>
   );
 }
+
+const labelClass = 'flex items-center gap-1.5 h-5 mb-0.5 text-xs text-neutral-500 dark:text-neutral-400';

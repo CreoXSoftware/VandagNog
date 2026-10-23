@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Play, Square } from 'lucide-react';
+import { Play, Square, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '@/lib/i18n';
 import {
@@ -10,6 +10,7 @@ import {
   pushRecent,
   type ActiveTimerPatch,
 } from '@/hooks/useTimeEntries';
+import { useDiscardRunningTimer } from '@/hooks/useDiscardRunningTimer';
 import { TaskTargetPicker } from './TaskTargetPicker';
 import { TargetSegments } from './TargetSegments';
 import { NoteInput, type NoteSuggestion } from './NoteInput';
@@ -39,6 +40,7 @@ export function LiveTimerCard({ target, setTarget, notes, setNotes, header }: Pr
   const start = useStartTimer();
   const stop = useStopTimer();
   const updateActive = useUpdateActiveTimer();
+  const discard = useDiscardRunningTimer();
   const [pickerOpen, setPickerOpen] = useState(false);
   const now = useServerNow(!!active);
 
@@ -154,6 +156,18 @@ export function LiveTimerCard({ target, setTarget, notes, setNotes, header }: Pr
           <div className="font-mono text-lg tabular-nums px-1 text-neutral-900 dark:text-neutral-100">
             {formatHMS(liveElapsed)}
           </div>
+          {running && (
+            <button
+              type="button"
+              onClick={discard.run}
+              disabled={!editable || discard.isPending || stop.isPending}
+              aria-label={t('tracker.discard')}
+              title={t('tracker.discard')}
+              className="h-9 w-9 rounded-md flex items-center justify-center shrink-0 text-neutral-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
           <button
             type="button"
             onClick={running ? onStop : onStart}

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Pencil, Play, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useT } from '@/lib/i18n';
@@ -8,12 +8,28 @@ import {
   useDeleteTimeEntry,
   useMyTimeEntries,
   useStartTimer,
+  useUpdateTimeEntry,
+  type UpdateEntryInput,
 } from '@/hooks/useTimeEntries';
 import { entryInOrg, useTrackerCatalog, workItemPath, type TrackerCatalog } from '@/hooks/useTrackerCatalog';
 import { useCurrentOrg } from '@/lib/currentOrg';
-import { durationMs, formatHM, formatWeekLabel, formatDateHuman, weekStartIso, isoDate } from '@/lib/timeFormat';
+import {
+  combineDateTime,
+  daysApart,
+  durationMs,
+  formatHM,
+  formatWeekLabel,
+  formatDateHuman,
+  isoDate,
+  isoTime,
+  parseDurationText,
+  sessionRange,
+  weekStartIso,
+} from '@/lib/timeFormat';
+import { cn } from '@/lib/utils';
 import type { TimeEntry, TrackerTarget } from '@/types/db';
 import { SessionEditDialog } from './SessionEditDialog';
+import { NextDayMark } from './ManualEntryForm';
 
 interface Props {
   /** Called after a timer is started from a past session. */
@@ -311,7 +327,8 @@ function GroupBlock({
   onDelete: (e: TimeEntry) => void;
 } & ResumeProps) {
   const t = useT();
-  const [open, setOpen] = useState(false);
+  // Open by default: the entries are what you come to the list for.
+  const [open, setOpen] = useState(true);
   const label = targetLabel(group.project_id, group.work_item_id, group.custom_task_text, catalog, t);
   const target: TrackerTarget = {
     project_id: group.project_id,
@@ -361,6 +378,9 @@ function GroupBlock({
   );
 }
 
+// Note, start, end and duration are edited in place: each saves when it loses
+// focus (or on Enter) and Escape puts it back. The pencil opens the full dialog
+// for the date and the task.
 function EntryRow({
   entry,
   onEdit,
@@ -375,45 +395,178 @@ function EntryRow({
   onResume: () => void;
 }) {
   const t = useT();
+  const update = useUpdateTimeEntry();
   const ms = durationMs(entry.start_at, entry.end_at);
-  const startTime = new Date(entry.start_at);
-  const endTime = entry.end_at ? new Date(entry.end_at) : null;
+  const startD = new Date(entry.start_at);
+  // The list skips the running entry, so there is always an end.
+  const endD = entry.end_at ? new Date(entry.end_at) : new Date(startD);
+  const endDays = daysApart(startD, endD);
+
+  async function save(patch: UpdateEntryInput['patch']): Promise<boolean> {
+    try {
+      await update.mutateAsync({ id: entry.id, patch });
+      return true;
+    } catch (err) {
+      toast.error((err as Error).message);
+      return false;
+    }
+  }
+
+  function saveNotes(v: string) {
+    const next = v.trim() || null;
+    if (next === (entry.notes ?? null)) return true;
+    return save({ notes: next });
+  }
+
+  // Only the edited field is written, so the other end keeps its seconds.
+  function saveStart(time: string) {
+    if (!time) return false;
+    const s = combineDateTime(isoDate(startD), time);
+    if (s >= endD) {
+      toast.error(t('tracker.endBeforeStart'));
+      return false;
+    }
+    return save({ start_at: s.toISOString() });
+  }
+
+  // An end before the start runs past midnight, as in manual entry.
+  function saveEnd(time: string) {
+    if (!time) return false;
+    const e = sessionRange(isoDate(startD), isoTime(startD), time).end;
+    if (e <= startD) {
+      toast.error(t('tracker.endBeforeStart'));
+      return false;
+    }
+    return save({ end_at: e.toISOString() });
+  }
+
+  function saveDuration(text: string) {
+    const d = parseDurationText(text);
+    if (d == null) {
+      toast.error(t('tracker.durationInvalid'));
+      return false;
+    }
+    return save({ end_at: new Date(startD.getTime() + d).toISOString() });
+  }
+
   return (
-    <div className="flex items-center px-3 py-2 gap-3 text-sm">
-      <div className="flex-1 min-w-0">
-        <div className="text-neutral-700 dark:text-neutral-200">
-          {fmtTime(startTime)} – {endTime ? fmtTime(endTime) : t('tracker.running')}
-        </div>
-        {entry.notes && (
-          <div className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5 truncate">{entry.notes}</div>
-        )}
+    <div className="flex items-center pl-6 pr-3 py-1 gap-1 text-sm">
+      <InlineInput
+        value={entry.notes ?? ''}
+        onCommit={saveNotes}
+        placeholder={t('tracker.addNote')}
+        aria-label={t('tracker.notesLabel')}
+        className="flex-1 min-w-0 text-xs text-neutral-600 dark:text-neutral-300 placeholder:text-neutral-400 dark:placeholder:text-neutral-500"
+      />
+      <InlineInput
+        type="time"
+        value={isoTime(startD)}
+        onCommit={saveStart}
+        aria-label={t('tracker.startTime')}
+        className={timeClass}
+      />
+      <span className="text-neutral-400">–</span>
+      <InlineInput
+        type="time"
+        value={isoTime(endD)}
+        onCommit={saveEnd}
+        aria-label={t('tracker.endTime')}
+        className={timeClass}
+      />
+      <span className="w-7 shrink-0">{endDays > 0 && <NextDayMark days={endDays} date={endD} />}</span>
+      <InlineInput
+        value={formatHM(ms)}
+        onCommit={saveDuration}
+        aria-label={t('tracker.duration')}
+        title={t('tracker.durationHint')}
+        className="w-[4.75rem] shrink-0 text-right font-mono tabular-nums text-neutral-600 dark:text-neutral-300"
+      />
+      <div className="flex items-center gap-1 pl-1 shrink-0">
+        <ResumeButton state={resumeState} onClick={onResume} />
+        <button
+          type="button"
+          onClick={() => onEdit(entry)}
+          aria-label={t('common.edit')}
+          title={t('common.edit')}
+          className="p-1 text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded"
+        >
+          <Pencil size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onDelete(entry)}
+          aria-label={t('common.delete')}
+          title={t('common.delete')}
+          className="p-1 text-neutral-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 rounded"
+        >
+          <Trash2 size={12} />
+        </button>
       </div>
-      <div className="font-mono tabular-nums text-neutral-600 dark:text-neutral-300">{formatHM(ms)}</div>
-      <ResumeButton state={resumeState} onClick={onResume} />
-      <button
-        type="button"
-        onClick={() => onEdit(entry)}
-        aria-label={t('common.edit')}
-        title={t('common.edit')}
-        className="p-1 text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded"
-      >
-        <Pencil size={12} />
-      </button>
-      <button
-        type="button"
-        onClick={() => onDelete(entry)}
-        aria-label={t('common.delete')}
-        title={t('common.delete')}
-        className="p-1 text-neutral-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 rounded"
-      >
-        <Trash2 size={12} />
-      </button>
     </div>
   );
 }
 
-function fmtTime(d: Date): string {
-  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+// Room for a 12-hour "PM"; the clock icon is hidden to keep the row compact.
+const timeClass =
+  'w-[5.5rem] shrink-0 tabular-nums text-neutral-700 dark:text-neutral-200 [&::-webkit-calendar-picker-indicator]:hidden';
+
+// A borderless input that reads as text until hovered or focused. It keeps its
+// own draft and calls onCommit only when the value changed; onCommit returning
+// false puts the stored value back.
+function InlineInput({
+  value,
+  onCommit,
+  className,
+  ...rest
+}: {
+  value: string;
+  onCommit: (v: string) => boolean | Promise<boolean>;
+} & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'onBlur' | 'onKeyDown'>) {
+  const [draft, setDraft] = useState(value);
+  // Follow the stored value when it changes (a save landing, an edit elsewhere).
+  const [synced, setSynced] = useState(value);
+  if (value !== synced) {
+    setSynced(value);
+    setDraft(value);
+  }
+  // Escape blurs too; this stops that blur from saving.
+  const cancelled = useRef(false);
+
+  async function commit() {
+    if (cancelled.current) {
+      cancelled.current = false;
+      return;
+    }
+    if (draft === value) return;
+    if (!(await onCommit(draft))) setDraft(value);
+  }
+
+  return (
+    <input
+      {...rest}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => void commit()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.currentTarget.blur();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          cancelled.current = true;
+          setDraft(value);
+          e.currentTarget.blur();
+        }
+      }}
+      autoComplete="off"
+      className={cn(
+        'h-7 rounded px-1.5 bg-transparent border border-transparent',
+        'hover:border-neutral-300 dark:hover:border-neutral-700',
+        'focus:outline-none focus:border-neutral-400 dark:focus:border-neutral-600 focus:bg-white dark:focus:bg-neutral-950',
+        className,
+      )}
+    />
+  );
 }
 
 function PathLabel({ parts }: { parts: string[] }) {
