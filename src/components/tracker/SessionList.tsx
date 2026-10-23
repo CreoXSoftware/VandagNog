@@ -30,6 +30,8 @@ import { cn } from '@/lib/utils';
 import type { TimeEntry, TrackerTarget } from '@/types/db';
 import { SessionEditDialog } from './SessionEditDialog';
 import { NextDayMark } from './ManualEntryForm';
+import { TargetPathText } from './TaskTargetPicker';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/Tooltip';
 
 interface Props {
   /** Called after a timer is started from a past session. */
@@ -345,13 +347,13 @@ function GroupBlock({
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="flex-1 min-w-0 flex items-center justify-between pl-3 pr-3 py-2"
+          className="flex-1 min-w-0 flex items-center justify-between gap-3 pl-3 pr-3 py-1.5 text-left"
         >
           <div className="flex items-center gap-1.5 min-w-0">
-            {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            {open ? <ChevronDown size={12} className="shrink-0" /> : <ChevronRight size={12} className="shrink-0" />}
             <PathLabel parts={label} />
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 shrink-0">
             <span className="text-[11px] text-neutral-500 dark:text-neutral-400">{group.entries.length}</span>
             <span className="text-sm font-mono tabular-nums text-neutral-600 dark:text-neutral-300">{formatHM(group.totalMs)}</span>
           </div>
@@ -456,6 +458,7 @@ function EntryRow({
         onCommit={saveNotes}
         placeholder={t('tracker.addNote')}
         aria-label={t('tracker.notesLabel')}
+        title={entry.notes ?? undefined}
         className="flex-1 min-w-0 text-xs text-neutral-600 dark:text-neutral-300 placeholder:text-neutral-400 dark:placeholder:text-neutral-500"
       />
       <InlineInput
@@ -569,23 +572,33 @@ function InlineInput({
   );
 }
 
+// Two lines so a deep path always fits: client › project › parent tasks small
+// on top, the task itself below. Both wrap rather than cut off; hovering still
+// shows the whole path on one line.
 function PathLabel({ parts }: { parts: string[] }) {
+  const leaf = parts[parts.length - 1];
+  const trail = parts.slice(0, -1);
   return (
-    <div className="flex items-center gap-1 min-w-0">
-      {parts.map((p, i) => (
-        <span key={i} className="flex items-center gap-1 min-w-0">
-          <span
-            className={[
-              'truncate',
-              i === parts.length - 1 ? 'text-neutral-900 dark:text-neutral-100 font-medium' : 'text-neutral-500 dark:text-neutral-400',
-            ].join(' ')}
-          >
-            {p}
-          </span>
-          {i < parts.length - 1 && <ChevronRight size={10} className="text-neutral-300 dark:text-neutral-600 shrink-0" />}
-        </span>
-      ))}
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className="min-w-0">
+          {trail.length > 0 && (
+            <div className="flex flex-wrap items-center gap-x-1 text-[11px] leading-4 text-neutral-500 dark:text-neutral-400">
+              {trail.map((p, i) => (
+                <span key={i} className="flex items-center gap-1 min-w-0 break-words">
+                  {i > 0 && <ChevronRight size={9} className="text-neutral-300 dark:text-neutral-600 shrink-0" />}
+                  {p}
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="text-sm leading-5 font-medium text-neutral-900 dark:text-neutral-100 break-words">{leaf}</div>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="start" className="max-w-md break-words">
+        <TargetPathText parts={parts} />
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
