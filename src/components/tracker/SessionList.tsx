@@ -257,13 +257,16 @@ function WeekBlock({
   onEdit: (e: TimeEntry) => void;
   onDelete: (e: TimeEntry) => void;
 } & ResumeProps) {
+  // Weeks are the indigo bands; days and tasks stay neutral or take their
+  // project's colour, so the three levels never look alike.
   return (
-    <div className="rounded-lg border border-neutral-200 dark:border-neutral-800 overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 bg-neutral-50 dark:bg-neutral-900">
-        <div className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">
+    <div className="rounded-lg border border-indigo-200 dark:border-indigo-900/70 overflow-hidden bg-white dark:bg-neutral-950">
+      <div className="flex items-center gap-4 px-3 py-2 bg-indigo-50 dark:bg-indigo-950/50 border-b border-indigo-200 dark:border-indigo-900/70">
+        <div className="flex-1 min-w-0 text-sm font-semibold text-indigo-950 dark:text-indigo-100">
           {formatWeekLabel(week.weekStart)}
         </div>
-        <div className="text-sm font-mono tabular-nums text-neutral-600 dark:text-neutral-300">
+        <WeekStrip week={week} />
+        <div className="text-base font-mono font-semibold tabular-nums text-indigo-900 dark:text-indigo-100">
           {formatHM(week.totalMs)}
         </div>
       </div>
@@ -272,6 +275,36 @@ function WeekBlock({
           <DayBlock key={day.date} day={day} catalog={catalog} onEdit={onEdit} onDelete={onDelete} {...resume} />
         ))}
       </div>
+    </div>
+  );
+}
+
+// Hours per weekday, Monday first, as small bars: the week's shape at a glance.
+// A full 8-hour day fills a bar unless a longer day sets the scale.
+function WeekStrip({ week }: { week: WeekNode }) {
+  const monday = new Date(week.weekStart + 'T00:00:00');
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(d.getDate() + i);
+    return { date: d, ms: week.days.find((x) => x.date === isoDate(d))?.totalMs ?? 0 };
+  });
+  const max = Math.max(8 * 3_600_000, ...days.map((d) => d.ms));
+  return (
+    <div className="hidden sm:flex items-end gap-1 shrink-0" aria-hidden>
+      {days.map(({ date, ms }) => (
+        <div
+          key={date.getDay()}
+          title={`${formatDateHuman(date)} · ${formatHM(ms)}`}
+          className="flex flex-col items-center gap-0.5"
+        >
+          <div className="w-3.5 h-5 rounded-sm bg-indigo-100 dark:bg-indigo-900/50 flex items-end overflow-hidden">
+            <div className="w-full bg-indigo-500 dark:bg-indigo-400" style={{ height: `${(ms / max) * 100}%` }} />
+          </div>
+          <span className="text-[9px] leading-none text-indigo-700/80 dark:text-indigo-300/80">
+            {date.toLocaleDateString(undefined, { weekday: 'narrow' })}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -288,31 +321,84 @@ function DayBlock({
   onEdit: (e: TimeEntry) => void;
   onDelete: (e: TimeEntry) => void;
 } & ResumeProps) {
+  const t = useT();
   const [open, setOpen] = useState(true);
+  const date = new Date(day.date + 'T00:00:00');
+  const isToday = day.date === isoDate(new Date());
+  // The date sits in its own column beside the day's tasks (above them on a
+  // phone), so the day header doesn't add another row to the stack.
   return (
-    <div>
+    <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 px-3 py-2.5">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-3 py-2 bg-white dark:bg-neutral-950 hover:bg-neutral-50 dark:hover:bg-neutral-900"
+        aria-expanded={open}
+        className="sm:w-24 shrink-0 self-start flex sm:flex-col items-baseline sm:items-start gap-x-2 rounded px-1 -mx-1 py-0.5 text-left hover:bg-neutral-100 dark:hover:bg-neutral-900"
       >
-        <div className="flex items-center gap-1.5">
-          {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          <span className="text-sm text-neutral-700 dark:text-neutral-200">{formatDateHuman(day.date + 'T00:00:00')}</span>
-        </div>
-        <div className="text-sm font-mono tabular-nums text-neutral-600 dark:text-neutral-300">
+        <span
+          className={cn(
+            'flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide',
+            isToday ? 'text-amber-600 dark:text-amber-400' : 'text-neutral-500 dark:text-neutral-400',
+          )}
+        >
+          {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          {date.toLocaleDateString(undefined, { weekday: 'short' })}
+        </span>
+        <span
+          className={cn(
+            'text-sm font-semibold',
+            isToday ? 'text-amber-700 dark:text-amber-300' : 'text-neutral-800 dark:text-neutral-100',
+          )}
+        >
+          {date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}
+        </span>
+        <span className="ml-auto sm:ml-0 sm:mt-0.5 text-sm font-mono tabular-nums text-neutral-600 dark:text-neutral-300">
           {formatHM(day.totalMs)}
-        </div>
+        </span>
       </button>
-      {open && (
-        <div className="bg-neutral-50/50 dark:bg-neutral-900/40">
+      {open ? (
+        <div className="flex-1 min-w-0 space-y-1.5">
           {day.groups.map((g) => (
             <GroupBlock key={g.key} group={g} catalog={catalog} onEdit={onEdit} onDelete={onDelete} {...resume} />
+          ))}
+        </div>
+      ) : (
+        // Collapsed: one dot per task in its project's colour.
+        <div className="flex-1 min-w-0 flex flex-wrap items-center gap-1.5 sm:pt-1.5">
+          {day.groups.map((g) => (
+            <span
+              key={g.key}
+              title={targetLabel(g.project_id, g.work_item_id, g.custom_task_text, catalog, t).join(' › ')}
+              className={cn('h-2.5 w-2.5 rounded-full', projectHue(g.project_id).stripe)}
+            />
           ))}
         </div>
       )}
     </div>
   );
+}
+
+// A colour per project, picked from its id so it stays the same everywhere.
+// Indigo is left out: it marks the weeks.
+const HUES = [
+  { stripe: 'bg-emerald-500', tint: 'bg-emerald-50 dark:bg-emerald-950/30', text: 'text-emerald-700 dark:text-emerald-400' },
+  { stripe: 'bg-sky-500', tint: 'bg-sky-50 dark:bg-sky-950/30', text: 'text-sky-700 dark:text-sky-400' },
+  { stripe: 'bg-rose-500', tint: 'bg-rose-50 dark:bg-rose-950/30', text: 'text-rose-700 dark:text-rose-400' },
+  { stripe: 'bg-amber-500', tint: 'bg-amber-50 dark:bg-amber-950/30', text: 'text-amber-700 dark:text-amber-400' },
+  { stripe: 'bg-violet-500', tint: 'bg-violet-50 dark:bg-violet-950/30', text: 'text-violet-700 dark:text-violet-400' },
+  { stripe: 'bg-teal-500', tint: 'bg-teal-50 dark:bg-teal-950/30', text: 'text-teal-700 dark:text-teal-400' },
+  { stripe: 'bg-orange-500', tint: 'bg-orange-50 dark:bg-orange-950/30', text: 'text-orange-700 dark:text-orange-400' },
+  { stripe: 'bg-fuchsia-500', tint: 'bg-fuchsia-50 dark:bg-fuchsia-950/30', text: 'text-fuchsia-700 dark:text-fuchsia-400' },
+  { stripe: 'bg-lime-500', tint: 'bg-lime-50 dark:bg-lime-950/30', text: 'text-lime-700 dark:text-lime-400' },
+  { stripe: 'bg-cyan-500', tint: 'bg-cyan-50 dark:bg-cyan-950/30', text: 'text-cyan-700 dark:text-cyan-400' },
+] as const;
+
+type Hue = (typeof HUES)[number];
+
+function projectHue(projectId: string): Hue {
+  let h = 0;
+  for (let i = 0; i < projectId.length; i++) h = (h * 31 + projectId.charCodeAt(i)) | 0;
+  return HUES[Math.abs(h) % HUES.length];
 }
 
 function GroupBlock({
@@ -338,44 +424,53 @@ function GroupBlock({
     custom_task_text: group.custom_task_text,
   };
   const state = resumeState(target);
+  const hue = projectHue(group.project_id);
 
-  // The play button sits beside the expand toggle rather than inside it: a
-  // button can't contain another button.
+  // A card per task, edged and tinted in its project's colour. The play button
+  // sits beside the expand toggle rather than inside it: a button can't contain
+  // another button.
   return (
-    <div className="border-t border-neutral-200 dark:border-neutral-800">
-      <div className="flex items-center hover:bg-neutral-100 dark:hover:bg-neutral-800">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="flex-1 min-w-0 flex items-center justify-between gap-3 pl-3 pr-3 py-1.5 text-left"
-        >
-          <div className="flex items-center gap-1.5 min-w-0">
-            {open ? <ChevronDown size={12} className="shrink-0" /> : <ChevronRight size={12} className="shrink-0" />}
-            <PathLabel parts={label} />
+    <div className="flex rounded-md border border-neutral-200 dark:border-neutral-800 overflow-hidden">
+      <div className={cn('w-1 shrink-0', hue.stripe)} />
+      <div className="flex-1 min-w-0">
+        <div className={cn('flex items-center', hue.tint)}>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="flex-1 min-w-0 flex items-center justify-between gap-3 pl-2 pr-3 py-1.5 text-left hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              {open ? <ChevronDown size={12} className="shrink-0" /> : <ChevronRight size={12} className="shrink-0" />}
+              <PathLabel parts={label} trailClass={hue.text} />
+            </div>
+            <div className="flex items-center gap-3 shrink-0">
+              {group.entries.length > 1 && (
+                <span className="rounded-full px-1.5 text-[11px] tabular-nums bg-white/70 dark:bg-neutral-900/70 text-neutral-500 dark:text-neutral-400">
+                  ×{group.entries.length}
+                </span>
+              )}
+              <span className="text-sm font-mono font-semibold tabular-nums text-neutral-800 dark:text-neutral-100">{formatHM(group.totalMs)}</span>
+            </div>
+          </button>
+          <div className="pr-3">
+            <ResumeButton state={state} onClick={() => onResume(target)} />
           </div>
-          <div className="flex items-center gap-3 shrink-0">
-            <span className="text-[11px] text-neutral-500 dark:text-neutral-400">{group.entries.length}</span>
-            <span className="text-sm font-mono tabular-nums text-neutral-600 dark:text-neutral-300">{formatHM(group.totalMs)}</span>
-          </div>
-        </button>
-        <div className="pr-3">
-          <ResumeButton state={state} onClick={() => onResume(target)} />
         </div>
+        {open && (
+          <div className="divide-y divide-neutral-100 dark:divide-neutral-800/70 border-t border-neutral-200/70 dark:border-neutral-800">
+            {group.entries.map((e) => (
+              <EntryRow
+                key={e.id}
+                entry={e}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                resumeState={state}
+                onResume={() => onResume(target)}
+              />
+            ))}
+          </div>
+        )}
       </div>
-      {open && (
-        <div className="divide-y divide-neutral-200/70 dark:divide-neutral-800/60">
-          {group.entries.map((e) => (
-            <EntryRow
-              key={e.id}
-              entry={e}
-              onEdit={onEdit}
-              onDelete={onDelete}
-              resumeState={state}
-              onResume={() => onResume(target)}
-            />
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -452,7 +547,7 @@ function EntryRow({
   }
 
   return (
-    <div className="flex items-center pl-6 pr-3 py-1 gap-1 text-sm">
+    <div className="flex items-center pl-3.5 pr-3 py-0.5 gap-1 text-sm hover:bg-neutral-50 dark:hover:bg-neutral-900/60">
       <InlineInput
         value={entry.notes ?? ''}
         onCommit={saveNotes}
@@ -574,8 +669,8 @@ function InlineInput({
 
 // Two lines so a deep path always fits: client › project › parent tasks small
 // on top, the task itself below. Both wrap rather than cut off; hovering still
-// shows the whole path on one line.
-function PathLabel({ parts }: { parts: string[] }) {
+// shows the whole path on one line. The trail takes the project's colour.
+function PathLabel({ parts, trailClass }: { parts: string[]; trailClass: string }) {
   const leaf = parts[parts.length - 1];
   const trail = parts.slice(0, -1);
   return (
@@ -583,7 +678,7 @@ function PathLabel({ parts }: { parts: string[] }) {
       <TooltipTrigger asChild>
         <div className="min-w-0">
           {trail.length > 0 && (
-            <div className="flex flex-wrap items-center gap-x-1 text-[11px] leading-4 text-neutral-500 dark:text-neutral-400">
+            <div className={cn('flex flex-wrap items-center gap-x-1 text-[11px] leading-4 font-medium', trailClass)}>
               {trail.map((p, i) => (
                 <span key={i} className="flex items-center gap-1 min-w-0 break-words">
                   {i > 0 && <ChevronRight size={9} className="text-neutral-300 dark:text-neutral-600 shrink-0" />}

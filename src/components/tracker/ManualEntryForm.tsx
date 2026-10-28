@@ -103,6 +103,11 @@ export function ManualEntryForm({ target, setTarget, notes, setNotes, header }: 
       pushRecent(target);
       toast.success(t('tracker.entryAdded'));
       setNotes('');
+      // The next entry most likely follows on: start it where this one ended,
+      // keeping the same length (the duration text already carries it).
+      setDate(isoDate(endDt));
+      setStart(isoTime(endDt));
+      setEnd(isoTime(new Date(endDt.getTime() + previewMs)));
     } catch (err) {
       toast.error((err as Error).message);
     }
