@@ -144,9 +144,17 @@ const workloadRoute = createRoute({
   component: WorkloadPage,
 });
 
+interface FeedbackSearch {
+  /** A request to open and scroll to (from a notification). */
+  request?: string;
+}
+
 const feedbackRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: '/feedback',
+  validateSearch: (s: Record<string, unknown>): FeedbackSearch => ({
+    request: typeof s.request === 'string' ? s.request : undefined,
+  }),
   component: FeedbackPage,
 });
 

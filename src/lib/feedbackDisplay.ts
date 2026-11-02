@@ -4,6 +4,8 @@ import type { FeedbackPriority, FeedbackStatus, FeedbackType } from '@/types/db'
 // Labels and badge colours for feature requests / bug reports.
 
 export const FEEDBACK_STATUSES: FeedbackStatus[] = ['new', 'approved', 'in_progress', 'done', 'rejected'];
+/** Not closed yet (the "Open" filter). */
+export const OPEN_FEEDBACK_STATUSES: FeedbackStatus[] = ['new', 'approved', 'in_progress'];
 export const FEEDBACK_PRIORITIES: FeedbackPriority[] = ['low', 'medium', 'high', 'critical'];
 
 export const feedbackStatusKey: Record<FeedbackStatus, TKey> = {

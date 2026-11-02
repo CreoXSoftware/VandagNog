@@ -99,7 +99,7 @@ TaskPlanner/
 - [x] Realtime: one channel per project; per-user channel for notifications
 - [x] Audit log of work_item / dependency / member changes
 - [x] Soft delete + cascade (work_items)
-- [x] Feedback page: feature requests & bug reports sent to an organization; its owners/admins set the status (`sql/feature_requests.sql`)
+- [x] Feedback page: feature requests & bug reports go to the app admins (`app_admins`), who get a notification per request and set the status; the sender is notified of status changes (`sql/feature_requests.sql`)
 
 ## v2 / Roadmap (intentionally not built)
 

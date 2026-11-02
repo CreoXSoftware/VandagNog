@@ -1,24 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/hooks/useAuth';
 import type { FeatureRequest, FeedbackPriority, FeedbackStatus, FeedbackType } from '@/types/db';
 
 // Prefix of every feedback list.
 export const feedbackKey = ['feature_requests'] as const;
-export const orgFeedbackKey = (orgId: string) => ['feature_requests', 'org', orgId] as const;
-export const myFeedbackKey = (userId: string) => ['feature_requests', 'mine', userId] as const;
 
-// Requests sent to an org. RLS decides what that means: owners/admins get all
-// of them, everyone else only their own.
-export function useOrgFeedback(orgId: string | undefined, enabled = true) {
+// RLS decides what this is: app admins get every request, everyone else their
+// own.
+export function useFeedback() {
+  const { user } = useAuth();
   return useQuery({
-    queryKey: orgId ? orgFeedbackKey(orgId) : ['feature_requests', 'org', 'none'],
-    enabled: !!orgId && enabled,
+    queryKey: [...feedbackKey, user?.id],
+    enabled: !!user,
     queryFn: async (): Promise<FeatureRequest[]> => {
-      if (!orgId) return [];
       const { data, error } = await supabase
         .from('feature_requests')
         .select('*')
-        .eq('org_id', orgId)
         .order('created_at', { ascending: false });
       if (error) throw error;
       return (data ?? []) as FeatureRequest[];
@@ -26,27 +24,22 @@ export function useOrgFeedback(orgId: string | undefined, enabled = true) {
   });
 }
 
-// Everything I sent, to any org. For the Personal org, which can't receive
-// feedback itself.
-export function useMyFeedback(userId: string | undefined, enabled = true) {
+/** Am I an app admin (a developer of the app, who triages all feedback)? */
+export function useIsAppAdmin() {
+  const { user } = useAuth();
   return useQuery({
-    queryKey: userId ? myFeedbackKey(userId) : ['feature_requests', 'mine', 'none'],
-    enabled: !!userId && enabled,
-    queryFn: async (): Promise<FeatureRequest[]> => {
-      if (!userId) return [];
-      const { data, error } = await supabase
-        .from('feature_requests')
-        .select('*')
-        .eq('submitted_by', userId)
-        .order('created_at', { ascending: false });
+    queryKey: ['is_app_admin', user?.id],
+    enabled: !!user,
+    staleTime: Infinity,
+    queryFn: async (): Promise<boolean> => {
+      const { data, error } = await supabase.rpc('is_app_admin');
       if (error) throw error;
-      return (data ?? []) as FeatureRequest[];
+      return data === true;
     },
   });
 }
 
 export interface NewFeedback {
-  org_id: string;
   type: FeedbackType;
   title: string;
   description: string;
@@ -54,8 +47,8 @@ export interface NewFeedback {
   priority?: FeedbackPriority | null;
 }
 
-// submitted_by and status are filled in by the database (the client may not
-// set them).
+// The sender, their org, and the status are filled in by the database (the
+// client may not set them).
 export function useSubmitFeedback() {
   const qc = useQueryClient();
   return useMutation({
@@ -64,7 +57,6 @@ export function useSubmitFeedback() {
       const { data, error } = await supabase
         .from('feature_requests')
         .insert({
-          org_id: input.org_id,
           type: input.type,
           title: input.title,
           description: input.description,
@@ -80,7 +72,7 @@ export function useSubmitFeedback() {
   });
 }
 
-/** The status update reached no row: not an owner/admin of the request's org. */
+/** The status update reached no row: not an app admin. */
 export class FeedbackForbiddenError extends Error {
   constructor() {
     super('Not allowed to change the status of this request');
@@ -88,7 +80,7 @@ export class FeedbackForbiddenError extends Error {
   }
 }
 
-// Owners/admins of the request's org only; status is the one editable column.
+// App admins only; status is the one editable column.
 export function useSetFeedbackStatus() {
   const qc = useQueryClient();
   return useMutation({

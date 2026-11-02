@@ -6,7 +6,6 @@ import { Input, Textarea } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
 import { Dialog, DialogContent } from '@/components/ui/Dialog';
 import { useSubmitFeedback } from '@/hooks/useFeedback';
-import { useCurrentOrg } from '@/lib/currentOrg';
 import { FEEDBACK_PRIORITIES, feedbackPriorityKey } from '@/lib/feedbackDisplay';
 import { useT } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -14,9 +13,8 @@ import type { FeedbackPriority, FeedbackType } from '@/types/db';
 
 const labelCls = 'text-xs font-medium text-neutral-600 dark:text-neutral-300';
 
-// Send a feature request or bug report to the owners/admins of a shared org:
-// the current one, or — from the Personal org, which can't receive feedback —
-// one the user picks.
+// Send a feature request or bug report to the app admins (the app's
+// developers). The database notes who sent it and from which org.
 export function FeedbackDialog({
   open,
   onOpenChange,
@@ -39,44 +37,28 @@ export function FeedbackDialog({
 
 function FeedbackForm({ initialType, onDone }: { initialType: FeedbackType; onDone: () => void }) {
   const t = useT();
-  const { org, orgs } = useCurrentOrg();
   const submit = useSubmitFeedback();
-  const shared = orgs.filter((o) => !o.is_personal);
 
   const [type, setType] = useState<FeedbackType>(initialType);
-  const [orgId, setOrgId] = useState<string>(org.is_personal ? (shared[0]?.id ?? '') : org.id);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [steps, setSteps] = useState('');
   const [priority, setPriority] = useState<FeedbackPriority | ''>('');
 
-  if (shared.length === 0) {
-    return (
-      <div className="space-y-4">
-        <p className="text-sm text-neutral-600 dark:text-neutral-300">{t('feedback.noSharedOrg')}</p>
-        <div className="flex justify-end">
-          <Button variant="outline" onClick={onDone}>{t('common.close')}</Button>
-        </div>
-      </div>
-    );
-  }
-
   const isBug = type === 'bug';
-  const canSend = !!orgId && !!title.trim() && !!description.trim() && !submit.isPending;
+  const canSend = !!title.trim() && !!description.trim() && !submit.isPending;
 
   async function send() {
     if (!canSend) return;
     try {
       await submit.mutateAsync({
-        org_id: orgId,
         type,
         title: title.trim(),
         description: description.trim(),
         steps_to_reproduce: steps.trim() || null,
         priority: priority || null,
       });
-      const target = shared.find((o) => o.id === orgId);
-      toast.success(t('feedback.submitted_toast', { org: target?.name ?? '' }));
+      toast.success(t('feedback.submitted_toast'));
       onDone();
     } catch (err) {
       toast.error((err as Error).message);
@@ -99,17 +81,6 @@ function FeedbackForm({ initialType, onDone }: { initialType: FeedbackType; onDo
           label={t('feedback.featureLong')}
         />
       </div>
-
-      {(org.is_personal || shared.length > 1) && (
-        <div>
-          <label htmlFor="fb-org" className={labelCls}>{t('feedback.sendTo')}</label>
-          <Select id="fb-org" value={orgId} onChange={(e) => setOrgId(e.target.value)} className="w-full">
-            {shared.map((o) => (
-              <option key={o.id} value={o.id}>{o.name}</option>
-            ))}
-          </Select>
-        </div>
-      )}
 
       <div>
         <label htmlFor="fb-title" className={labelCls}>{t('feedback.titleLabel')}</label>

@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { Bell } from 'lucide-react';
 import { useNavigate } from '@tanstack/react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { formatDistanceToNow } from '@/lib/time';
 import { useMarkAllRead, useMarkNotificationRead, useNotifications } from '@/hooks/useNotifications';
+import { feedbackKey } from '@/hooks/useFeedback';
 import type { AppNotification } from '@/types/db';
 import { useT } from '@/lib/i18n';
 import { formatNotification } from '@/lib/notificationFormat';
@@ -15,6 +17,7 @@ export function NotificationBell() {
   const unread = data.filter((n) => !n.read_at).length;
   const t = useT();
   const nav = useNavigate();
+  const qc = useQueryClient();
 
   function handleClick(n: AppNotification) {
     const view = formatNotification(n, t);
@@ -29,6 +32,10 @@ export function NotificationBell() {
           tab: view.navigate.tab,
         },
       });
+    } else if (view.feedbackId) {
+      // The list may predate the request (or its new status).
+      void qc.invalidateQueries({ queryKey: feedbackKey });
+      nav({ to: '/feedback', search: { request: view.feedbackId } });
     }
     setOpen(false);
   }
@@ -68,7 +75,7 @@ export function NotificationBell() {
               data.map((n) => {
                 const view = formatNotification(n, t);
                 const created = new Date(n.created_at);
-                const clickable = !!view.navigate || !n.read_at;
+                const clickable = !!view.navigate || !!view.feedbackId || !n.read_at;
                 return (
                   <button
                     key={n.id}

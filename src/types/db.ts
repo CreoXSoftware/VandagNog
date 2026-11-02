@@ -85,10 +85,9 @@ export type FeedbackType = 'feature' | 'bug';
 export type FeedbackStatus = 'new' | 'approved' | 'in_progress' | 'done' | 'rejected';
 export type FeedbackPriority = 'low' | 'medium' | 'high' | 'critical';
 
-/** A feature request or bug report sent to an organization (feature_requests). */
+/** A feature request or bug report sent to the app admins (feature_requests). */
 export interface FeatureRequest {
   id: string;
-  org_id: string;
   type: FeedbackType;
   title: string;
   description: string;
@@ -99,6 +98,12 @@ export interface FeatureRequest {
   status: FeedbackStatus;
   /** Null once the sender's account is deleted. */
   submitted_by: string | null;
+  /** Copied when sent. */
+  sender_name: string | null;
+  sender_email: string | null;
+  /** The shared org picked in the sender's top bar when sent; null from Personal. */
+  org_id: string | null;
+  org_name: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -222,7 +227,9 @@ export type NotificationEvent =
   | 'comment_on_assigned_item'
   | 'invited'
   | 'predecessor_moved'
-  | 'assigned_item_deleted';
+  | 'assigned_item_deleted'
+  | 'feedback_received'
+  | 'feedback_status';
 
 export interface NotificationPayload {
   name?: string;
@@ -230,6 +237,12 @@ export interface NotificationPayload {
   comment_id?: string;
   predecessor_id?: string;
   predecessor_name?: string;
+  /** feedback_received / feedback_status */
+  type?: FeedbackType;
+  priority?: FeedbackPriority;
+  status?: FeedbackStatus;
+  /** feedback_received: who sent it (name or email). */
+  sender?: string;
 }
 
 export interface AppNotification {

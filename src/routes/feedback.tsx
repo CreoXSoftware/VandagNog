@@ -1,23 +1,21 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearch } from '@tanstack/react-router';
 import { toast } from 'sonner';
-import { Bug, ChevronDown, ChevronRight, Lightbulb } from 'lucide-react';
+import { Bug, ChevronDown, ChevronRight, Lightbulb, Mail } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Select } from '@/components/ui/Select';
 import { Badge } from '@/components/ui/Badge';
 import { FeedbackDialog } from '@/components/feedback/FeedbackDialog';
 import {
   FeedbackForbiddenError,
-  useMyFeedback,
-  useOrgFeedback,
+  useFeedback,
+  useIsAppAdmin,
   useSetFeedbackStatus,
 } from '@/hooks/useFeedback';
-import { orgRoleAtLeast, useOrgMembers } from '@/hooks/useOrgs';
 import { useAuth } from '@/hooks/useAuth';
-import { useCurrentOrg } from '@/lib/currentOrg';
-import { useOrgName } from '@/lib/orgDisplay';
-import { displayName } from '@/lib/userDisplay';
 import {
   FEEDBACK_STATUSES,
+  OPEN_FEEDBACK_STATUSES,
   feedbackPriorityClass,
   feedbackPriorityKey,
   feedbackStatusClass,
@@ -29,49 +27,43 @@ import { useT } from '@/lib/i18n';
 import { cn, formatDate } from '@/lib/utils';
 import type { FeatureRequest, FeedbackStatus, FeedbackType } from '@/types/db';
 
-type Scope = 'all' | 'mine';
+type StatusFilter = FeedbackStatus | 'open' | '';
+// '' = every org, NO_ORG = sent from a Personal space.
+const NO_ORG = '__none__';
 
-// Feature requests and bug reports for the current organization. Everyone sees
-// what they sent; owners/admins see everything sent to the org and set the
-// status. The Personal org can't receive feedback, so there the page lists
-// what the user sent to any org.
+// Feature requests and bug reports. They go to the app admins (the app's
+// developers), who see everything and set the status; everyone else sees what
+// they sent and where it stands.
 export function FeedbackPage() {
   const t = useT();
   const { user } = useAuth();
-  const { org, orgs } = useCurrentOrg();
-  const orgName = useOrgName();
-  const isAdmin = !org.is_personal && orgRoleAtLeast(org.my_role, 'admin');
-
-  const orgList = useOrgFeedback(org.id, !org.is_personal);
-  const mineList = useMyFeedback(user?.id, org.is_personal);
-  const { data: requests = [], isLoading } = org.is_personal ? mineList : orgList;
-  // Names of the people who sent them; only admins see other people's requests.
-  const { data: members = [] } = useOrgMembers(isAdmin ? org.id : undefined);
+  const { request: focusId } = useSearch({ from: '/_app/feedback' });
+  const { data: isAdmin = false } = useIsAppAdmin();
+  const { data: requests = [], isLoading } = useFeedback();
 
   const [dialogType, setDialogType] = useState<FeedbackType | null>(null);
-  const [scope, setScope] = useState<Scope>('all');
-  const [status, setStatus] = useState<FeedbackStatus | ''>('');
+  const [type, setType] = useState<FeedbackType | ''>('');
+  const [status, setStatus] = useState<StatusFilter>('');
+  const [org, setOrg] = useState('');
+
+  // Orgs the requests came from, for the app admin's filter.
+  const orgs = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const r of requests) if (r.org_id && r.org_name) byId.set(r.org_id, r.org_name);
+    return [...byId].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [requests]);
 
   const shown = useMemo(
     () =>
       requests.filter(
-        (r) => (!status || r.status === status) && (scope === 'all' || r.submitted_by === user?.id),
+        (r) =>
+          (!type || r.type === type) &&
+          (!status ||
+            (status === 'open' ? OPEN_FEEDBACK_STATUSES.includes(r.status) : r.status === status)) &&
+          (!org || (org === NO_ORG ? !r.org_id : r.org_id === org)),
       ),
-    [requests, status, scope, user?.id],
+    [requests, type, status, org],
   );
-
-  const nameOf = useMemo(() => {
-    const byId = new Map(members.map((m) => [m.user_id, displayName(m)]));
-    return (id: string | null) => (id ? byId.get(id) : undefined) ?? t('feedback.formerMember');
-  }, [members, t]);
-
-  const orgById = useMemo(() => new Map(orgs.map((o) => [o.id, o])), [orgs]);
-
-  const hint = org.is_personal
-    ? t('feedback.personalHint')
-    : isAdmin
-      ? t('feedback.adminHint', { org: orgName(org) })
-      : t('feedback.orgHint', { org: orgName(org) });
 
   return (
     <div className="h-full overflow-y-auto">
@@ -87,26 +79,37 @@ export function FeedbackPage() {
             </Button>
           </div>
         </div>
-        <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-4">{hint}</div>
+        <div className="text-xs text-neutral-500 dark:text-neutral-400 mb-4">
+          {isAdmin ? t('feedback.adminHint') : t('feedback.userHint')}
+        </div>
 
         {requests.length > 0 && (
-          <div className="flex items-center gap-2 mb-3">
-            {isAdmin && (
-              <Select value={scope} onChange={(e) => setScope(e.target.value as Scope)} aria-label={t('feedback.showMine')}>
-                <option value="all">{t('feedback.showAll')}</option>
-                <option value="mine">{t('feedback.showMine')}</option>
-              </Select>
-            )}
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <Select value={type} onChange={(e) => setType(e.target.value as FeedbackType | '')} aria-label={t('feedback.type')}>
+              <option value="">{t('feedback.allTypes')}</option>
+              <option value="feature">{t('feedback.typeFeature')}</option>
+              <option value="bug">{t('feedback.typeBug')}</option>
+            </Select>
             <Select
               value={status}
-              onChange={(e) => setStatus(e.target.value as FeedbackStatus | '')}
+              onChange={(e) => setStatus(e.target.value as StatusFilter)}
               aria-label={t('feedback.status')}
             >
               <option value="">{t('feedback.allStatuses')}</option>
+              <option value="open">{t('feedback.statusOpen')}</option>
               {FEEDBACK_STATUSES.map((s) => (
                 <option key={s} value={s}>{t(feedbackStatusKey[s])}</option>
               ))}
             </Select>
+            {isAdmin && (
+              <Select value={org} onChange={(e) => setOrg(e.target.value)} aria-label={t('feedback.org')}>
+                <option value="">{t('feedback.allOrgs')}</option>
+                {orgs.map(([id, name]) => (
+                  <option key={id} value={id}>{name}</option>
+                ))}
+                <option value={NO_ORG}>{t('feedback.noOrg')}</option>
+              </Select>
+            )}
           </div>
         )}
 
@@ -126,12 +129,15 @@ export function FeedbackPage() {
                 key={r.id}
                 request={r}
                 canTriage={isAdmin}
+                focused={r.id === focusId}
                 sender={
                   r.submitted_by === user?.id
                     ? t('feedback.sentOn', { date: formatDate(r.created_at) })
-                    : t('feedback.sentBy', { name: nameOf(r.submitted_by), date: formatDate(r.created_at) })
+                    : t('feedback.sentBy', {
+                        name: r.sender_name ?? r.sender_email ?? t('feedback.deletedUser'),
+                        date: formatDate(r.created_at),
+                      })
                 }
-                orgLabel={org.is_personal ? orgById.get(r.org_id)?.name : undefined}
               />
             ))}
           </div>
@@ -150,17 +156,30 @@ export function FeedbackPage() {
 function FeedbackRow({
   request: r,
   canTriage,
+  focused,
   sender,
-  orgLabel,
 }: {
   request: FeatureRequest;
   canTriage: boolean;
+  /** Opened from a notification: expand and scroll to it. */
+  focused: boolean;
   sender: string;
-  orgLabel?: string;
 }) {
   const t = useT();
   const setStatus = useSetFeedbackStatus();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(focused);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Another notification for a row that is already on screen: open it too.
+  const [wasFocused, setWasFocused] = useState(focused);
+  if (focused !== wasFocused) {
+    setWasFocused(focused);
+    if (focused) setOpen(true);
+  }
+
+  useEffect(() => {
+    if (focused) ref.current?.scrollIntoView({ block: 'center' });
+  }, [focused]);
 
   async function changeStatus(next: FeedbackStatus) {
     if (next === r.status) return;
@@ -173,7 +192,13 @@ function FeedbackRow({
   }
 
   return (
-    <div className="border border-neutral-200 dark:border-neutral-800 rounded-lg bg-white dark:bg-neutral-900">
+    <div
+      ref={ref}
+      className={cn(
+        'border rounded-lg bg-white dark:bg-neutral-900',
+        focused ? 'border-sky-400 dark:border-sky-600' : 'border-neutral-200 dark:border-neutral-800',
+      )}
+    >
       <div className="flex items-center gap-3 p-3">
         <button
           type="button"
@@ -191,7 +216,7 @@ function FeedbackRow({
             </span>
             <span className="block text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
               {sender}
-              {orgLabel && <> · {orgLabel}</>}
+              {canTriage && r.org_name && <> · {r.org_name}</>}
               {r.priority && (
                 <>
                   {' · '}
@@ -231,6 +256,14 @@ function FeedbackRow({
               </div>
               <p className="whitespace-pre-wrap break-words">{r.steps_to_reproduce}</p>
             </div>
+          )}
+          {canTriage && r.sender_email && (
+            <a
+              href={`mailto:${r.sender_email}?subject=${encodeURIComponent(`Re: ${r.title}`)}`}
+              className="inline-flex items-center gap-1.5 text-xs text-sky-700 hover:underline dark:text-sky-400"
+            >
+              <Mail size={12} /> {t('feedback.replyByEmail', { email: r.sender_email })}
+            </a>
           )}
         </div>
       )}

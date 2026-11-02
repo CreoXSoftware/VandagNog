@@ -1,11 +1,14 @@
 import type { AppNotification, NotificationEvent } from '@/types/db';
 import type { TKey } from '@/lib/i18n';
 import { displayName } from '@/lib/userDisplay';
+import { feedbackPriorityKey, feedbackStatusKey } from '@/lib/feedbackDisplay';
 
 export interface NotificationView {
   headline: string;
   meta: string[];
   navigate: { projectId: string; itemId: string; tab?: 'comments' | 'details' } | null;
+  /** feedback_*: the request to open on the Feedback page. */
+  feedbackId: string | null;
 }
 
 type T = (key: TKey, vars?: Record<string, string | number>) => string;
@@ -63,6 +66,22 @@ export function formatNotification(n: AppNotification, t: T): NotificationView {
     case 'invited':
       headline = t('notifications.events.invited');
       break;
+    case 'feedback_received':
+      // The sender's name travels in the payload: app admins usually can't
+      // read the sender's profile.
+      headline = t(
+        n.payload?.type === 'bug'
+          ? 'notifications.events.feedback_received_bug'
+          : 'notifications.events.feedback_received_feature',
+        { ...vars, actor: n.payload?.sender ?? vars.actor },
+      );
+      break;
+    case 'feedback_status':
+      headline = t('notifications.events.feedback_status', {
+        ...vars,
+        status: n.payload?.status ? t(feedbackStatusKey[n.payload.status]) : '',
+      });
+      break;
     default:
       headline = String(n.event_type);
   }
@@ -70,6 +89,9 @@ export function formatNotification(n: AppNotification, t: T): NotificationView {
   const meta: string[] = [];
   if (projectName) meta.push(projectName);
   if (level) meta.push(level);
+  if (n.event_type === 'feedback_received' && n.payload?.priority) {
+    meta.push(`${t('feedback.priority')}: ${t(feedbackPriorityKey[n.payload.priority])}`);
+  }
 
   const navigate =
     n.project_id && n.entity_id && n.event_type !== 'assigned_item_deleted'
@@ -80,5 +102,10 @@ export function formatNotification(n: AppNotification, t: T): NotificationView {
         }
       : null;
 
-  return { headline, meta, navigate };
+  const feedbackId =
+    (n.event_type === 'feedback_received' || n.event_type === 'feedback_status') && n.entity_id
+      ? n.entity_id
+      : null;
+
+  return { headline, meta, navigate, feedbackId };
 }
