@@ -22,6 +22,7 @@ import { TrackerPage } from '@/routes/tracker';
 import { TrackerReportsPage } from '@/routes/trackerReports';
 import { WorkloadPage } from '@/routes/workload';
 import { TasksPage } from '@/routes/tasks';
+import { FeedbackPage } from '@/routes/feedback';
 import { isTimeFilter, type TimeFilter } from '@/lib/tasksFilter';
 
 interface RouterContext {
@@ -143,6 +144,12 @@ const workloadRoute = createRoute({
   component: WorkloadPage,
 });
 
+const feedbackRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: '/feedback',
+  component: FeedbackPage,
+});
+
 interface TasksSearch {
   when?: TimeFilter;
   item?: string;
@@ -182,7 +189,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   authCallbackRoute,
   inviteRoute,
-  appLayoutRoute.addChildren([indexRoute, tasksRoute, projectsListRoute, profileRoute, projectRoute, orgsListRoute, orgRoute, legacyTeamsRoute, clientsListRoute, trackerRoute, trackerReportsRoute, workloadRoute]),
+  appLayoutRoute.addChildren([indexRoute, tasksRoute, projectsListRoute, profileRoute, projectRoute, orgsListRoute, orgRoute, legacyTeamsRoute, clientsListRoute, trackerRoute, trackerReportsRoute, workloadRoute, feedbackRoute]),
 ]);
 
 export function createAppRouter(queryClient: QueryClient) {

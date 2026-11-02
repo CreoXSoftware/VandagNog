@@ -81,6 +81,28 @@ export interface Client {
   deleted_at: string | null;
 }
 
+export type FeedbackType = 'feature' | 'bug';
+export type FeedbackStatus = 'new' | 'approved' | 'in_progress' | 'done' | 'rejected';
+export type FeedbackPriority = 'low' | 'medium' | 'high' | 'critical';
+
+/** A feature request or bug report sent to an organization (feature_requests). */
+export interface FeatureRequest {
+  id: string;
+  org_id: string;
+  type: FeedbackType;
+  title: string;
+  description: string;
+  /** Bugs only. */
+  steps_to_reproduce: string | null;
+  /** Bugs only. */
+  priority: FeedbackPriority | null;
+  status: FeedbackStatus;
+  /** Null once the sender's account is deleted. */
+  submitted_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ProjectClientInfo {
   project_id: string;
   client_id: string;

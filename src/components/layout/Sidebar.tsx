@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useRouterState } from '@tanstack/react-router';
-import { FolderKanban, Network, Timer, ChevronLeft, ChevronRight, Building2, Gauge, ListTodo } from 'lucide-react';
+import { FolderKanban, Network, Timer, ChevronLeft, ChevronRight, Building2, Gauge, ListTodo, MessageSquarePlus } from 'lucide-react';
 import { useT, type TKey } from '@/lib/i18n';
 
 interface NavItem {
@@ -10,6 +10,8 @@ interface NavItem {
   matchPrefix: string;
   disabled?: boolean;
   comingSoonKey?: TKey;
+  /** Hover text, when it should say more than the label. */
+  tipKey?: TKey;
 }
 
 const items: NavItem[] = [
@@ -20,6 +22,15 @@ const items: NavItem[] = [
   { to: '/workload', labelKey: 'nav.workload', icon: Gauge, matchPrefix: '/workload' },
   { to: '/tracker', labelKey: 'nav.tracker', icon: Timer, matchPrefix: '/tracker' },
 ];
+
+// Pinned to the bottom of the sidebar, apart from the pages.
+const feedbackItem: NavItem = {
+  to: '/feedback',
+  labelKey: 'nav.feedback',
+  icon: MessageSquarePlus,
+  matchPrefix: '/feedback',
+  tipKey: 'nav.feedbackTip',
+};
 
 const STORAGE_KEY = 'vn.sidebar.collapsed';
 
@@ -55,11 +66,14 @@ export function Sidebar() {
         {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
       </button>
 
-      {!collapsed && items.map((it) => {
+      {!collapsed && [...items, null, feedbackItem].map((it) => {
+        if (!it) return <div key="spacer" className="mt-auto" />;
         const active = path.startsWith(it.matchPrefix);
         const Icon = it.icon;
         const label = t(it.labelKey);
-        const tip = it.disabled && it.comingSoonKey ? `${label} — ${t(it.comingSoonKey)}` : label;
+        const tip = it.disabled && it.comingSoonKey
+          ? `${label} — ${t(it.comingSoonKey)}`
+          : it.tipKey ? t(it.tipKey) : label;
         const cls = [
           'flex flex-col items-center justify-center w-14 h-14 rounded-md transition-colors',
           active

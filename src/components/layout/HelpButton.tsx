@@ -1,6 +1,6 @@
 import { Fragment } from 'react';
-import { useRouterState } from '@tanstack/react-router';
-import { CircleHelp } from 'lucide-react';
+import { Link, useRouterState } from '@tanstack/react-router';
+import { CircleHelp, MessageSquarePlus } from 'lucide-react';
 import { Dialog, DialogContent } from '@/components/ui/Dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/Tooltip';
 import { useHelp } from '@/lib/helpStore';
@@ -16,6 +16,7 @@ type PageKey =
   | 'clients'
   | 'orgs'
   | 'profile'
+  | 'feedback'
   | 'general';
 
 type HelpItem =
@@ -41,6 +42,7 @@ function pageOf(pathname: string): PageKey {
   if (/\/clients$/.test(p)) return 'clients';
   if (/\/orgs(\/[^/]+)?$/.test(p)) return 'orgs';
   if (/\/profile$/.test(p)) return 'profile';
+  if (/\/feedback$/.test(p)) return 'feedback';
   return 'general';
 }
 
@@ -172,6 +174,13 @@ const PAGES: Record<PageKey, { name: TKey; intro: TKey; sections: HelpSection[] 
     intro: 'help.profile.intro',
     sections: [],
   },
+  feedback: {
+    name: 'help.feedback.name',
+    intro: 'help.feedback.intro',
+    sections: [
+      { items: [{ text: 'help.feedback.send' }, { text: 'help.feedback.status' }, { text: 'help.feedback.keep' }] },
+    ],
+  },
   general: {
     name: 'help.general.name',
     intro: 'help.general.intro',
@@ -256,6 +265,13 @@ export function HelpButton() {
             <li>{t('help.general.bell')}</li>
             <li>{t('help.general.lang')}</li>
           </ul>
+          <Link
+            to="/feedback"
+            onClick={() => setOpen(false)}
+            className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-neutral-700 dark:text-neutral-200 hover:underline"
+          >
+            <MessageSquarePlus size={14} /> {t('feedback.helpLink')}
+          </Link>
         </section>
       </DialogContent>
     </Dialog>
